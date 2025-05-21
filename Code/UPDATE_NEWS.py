@@ -152,5 +152,5 @@ def append_new_rows_to_excel(new_data: pd.DataFrame, excel_path: str):
 # ---------------------- MAIN ----------------------
 if __name__ == "__main__":
     df = get_news()
-    excel_path = r"C:\Users\10102\Downloads\DAILY UPDATE 2\final_combined_sentiment.xlsx"
+    excel_path = r"databases/final_combined_sentiment.xlsx"
     append_new_rows_to_excel(df, excel_path)
