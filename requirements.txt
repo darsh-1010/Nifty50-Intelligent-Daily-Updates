@@ -1,0 +1,8 @@
+pandas
+numpy
+openpyxl
+yfinance
+ta
+torch
+transformers
+requests
