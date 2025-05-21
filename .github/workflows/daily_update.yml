@@ -1,0 +1,37 @@
+name: Daily Nifty50 AI Update
+
+on:
+  schedule:
+    - cron: '30 2 * * *'  # runs every day at 8:00 AM IST
+  workflow_dispatch:      # allow manual runs
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run update scripts
+        run: |
+          python updateohlcv.py
+          python UPDATE_NEWS.py
+          python update_pcr.py
+
+      - name: Commit and push updated databases
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add databases/*.xlsx
+          git commit -m "Update databases [bot]" || echo "No changes to commit"
+          git push
