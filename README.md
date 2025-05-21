@@ -100,10 +100,10 @@ python update_pcr.py
 
 -------------
 
-##📬 Contributing
+## 📬 Contributing
 Pull requests are welcome. For major changes, open an issue first to discuss what you would like to change.
 
-##📢 Keywords for Discoverability
+## 📢 Keywords for Discoverability
 nginx
 Copy
 Edit
@@ -111,6 +111,6 @@ Nifty 50, Stock Market, Technical Analysis, News Sentiment, PCR, Derivatives, Al
 
 -----------------------------------------
 
-📄 License
+## 📄 License
 This project is for educational and research purposes. Always ensure compliance with financial data usage terms and data provider policies.
 
