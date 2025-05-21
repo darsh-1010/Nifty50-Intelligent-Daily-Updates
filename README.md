@@ -93,15 +93,17 @@ pip install -r requirements.txt'''
 
 # Run scripts manually
 python updateohlcv.py
+
 python UPDATE_NEWS.py
+
 python update_pcr.py
 
 -------------
 
-📬 Contributing
+##📬 Contributing
 Pull requests are welcome. For major changes, open an issue first to discuss what you would like to change.
 
-📢 Keywords for Discoverability
+##📢 Keywords for Discoverability
 nginx
 Copy
 Edit
