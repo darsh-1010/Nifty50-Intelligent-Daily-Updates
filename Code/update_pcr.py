@@ -1,4 +1,4 @@
-import os
+qimport os
 import requests
 import zipfile
 import pandas as pd
@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from openpyxl import load_workbook
 
 # ============ USER INPUT ============
-EXISTING_XLSX_PATH = r"C:\Users\10102\Downloads\DAILY UPDATE 2\Nifty_50_PCR_Hisotrical_Data.xlsx"  # <-- PUT YOUR ACTUAL PATH HERE
+EXISTING_XLSX_PATH = r"databases/Nifty_50_PCR_Hisotrical_Data.xlsx"  # <-- PUT YOUR ACTUAL PATH HERE
 TEMP_DIR = "temp_udiff_downloads"
 PROCESSED_XLSX_PATH = "Updated_PCR_Output.xlsx"  # Final PCR output (can be same as input if overwrite allowed)
 
