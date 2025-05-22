@@ -6,3 +6,5 @@ ta
 torch
 transformers
 requests
+xlsxwriter
+
