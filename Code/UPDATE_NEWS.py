@@ -7,16 +7,16 @@ import torch
 import os
  
 # ---------------------- API KEYS ----------------------
-# NEWSDATA_API_KEY = "pub_79508cd750e96ccb61c080a4e004aca7439c3"
-# FINNHUB_API_KEY = "cvrokohr01qnpem8p570cvrokohr01qnpem8p57g"
-# GNEWS_API_KEY = "434440771cb4bd849b92821e037741ba"
+NEWSDATA_API_KEY = "pub_79508cd750e96ccb61c080a4e004aca7439c3"
+FINNHUB_API_KEY = "cvrokohr01qnpem8p570cvrokohr01qnpem8p57g"
+GNEWS_API_KEY = "434440771cb4bd849b92821e037741ba"
 
-NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
-GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
+# NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
+# FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+# GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 
-if not all([NEWSDATA_API_KEY, FINNHUB_API_KEY, GNEWS_API_KEY]):
-    raise ValueError("❌ One or more API keys are not set in environment variables.")
+# if not all([NEWSDATA_API_KEY, FINNHUB_API_KEY, GNEWS_API_KEY]):
+#     raise ValueError("❌ One or more API keys are not set in environment variables.")
  
 # ---------------------- FINBERT SETUP ----------------------
 tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
