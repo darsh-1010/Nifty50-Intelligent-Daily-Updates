@@ -23,6 +23,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+      - name: Debug list all files
+        run: |
+          echo "Listing files in workspace:"
+          ls -R
 
       - name: Run update scripts
         run: |
