@@ -39,6 +39,12 @@ jobs:
           python Code/UPDATE_NEWS.py
           python Code/update_pcr.py
 
+        env:
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
+        
+
       - name: Commit and push updated databases
         run: |
           git config --global user.name "github-actions[bot]"
