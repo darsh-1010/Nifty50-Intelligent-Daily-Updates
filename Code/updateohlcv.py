@@ -8,7 +8,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
 # Constants
-excel_path = r"databases/nifty50_processed_features_updated_with_actions.xlsx"
+excel_path = r"Databases/nifty50_processed_features_updated_with_actions.xlsx"
 nifty50_tickers = [
     "RELIANCE", "TCS", "HDFC", "INFY", "HDFCBANK", "ICICIBANK",
     "KOTAKBANK", "BHARTIARTL", "ITC", "LT", "ASIANPAINT", "HINDUNILVR",
