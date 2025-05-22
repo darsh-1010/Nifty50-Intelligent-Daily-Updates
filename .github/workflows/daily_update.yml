@@ -2,7 +2,7 @@ name: Daily Nifty50 AI Update
 
 on:
   schedule:
-    - cron: '30 2 * * *'  # 8:00 AM IST
+    - cron: '30 2 * * *'  # Every day at 8:00 AM IST
   workflow_dispatch:
 
 jobs:
@@ -22,9 +22,11 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Debug file tree
+      - name: Debug workspace structure
         run: |
+          echo "Current directory:"
           pwd
+          echo "Files and folders:"
           ls -R
 
       - name: Run update scripts
