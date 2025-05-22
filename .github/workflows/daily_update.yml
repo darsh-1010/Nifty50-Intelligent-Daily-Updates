@@ -2,8 +2,8 @@ name: Daily Nifty50 AI Update
 
 on:
   schedule:
-    - cron: '30 2 * * *'  # runs every day at 8:00 AM IST
-  workflow_dispatch:      # allow manual runs
+    - cron: '30 2 * * *'  # 8:00 AM IST
+  workflow_dispatch:
 
 jobs:
   update-data:
@@ -12,8 +12,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -23,20 +21,24 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-      - name: Debug list all files
+
+      - name: Debug file tree
         run: |
-          echo "Listing files in workspace:"
+          pwd
           ls -R
 
       - name: Run update scripts
         run: |
-          python ./Code/updateohlcv.py
-          python ./Code/UPDATE_NEWS.py
-          python ./Code/update_pcr.py
+          python Code/updateohlcv.py
+          python Code/UPDATE_NEWS.py
+          python Code/update_pcr.py
+
       - name: Commit and push updated databases
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add databases/*.xlsx
+          git add Databases/*.xlsx
           git commit -m "Update databases [bot]" || echo "No changes to commit"
           git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
