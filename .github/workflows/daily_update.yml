@@ -26,9 +26,9 @@ jobs:
 
       - name: Run update scripts
         run: |
-          python updateohlcv.py
-          python UPDATE_NEWS.py
-          python update_pcr.py
+          Code/python updateohlcv.py
+          Code/python UPDATE_NEWS.py
+          Code/python update_pcr.py
 
       - name: Commit and push updated databases
         run: |
