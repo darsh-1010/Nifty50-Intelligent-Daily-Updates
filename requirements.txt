@@ -7,4 +7,5 @@ torch
 transformers
 requests
 xlsxwriter
-
+openpyxl
+cloudscrapper
