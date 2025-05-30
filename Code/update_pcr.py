@@ -179,28 +179,196 @@
 
 
 
-import requests
+# import requests
+# import pandas as pd
+# from datetime import datetime
+# import time
+
+# historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
+
+# def create_nse_session():
+#     session = requests.Session()
+#     headers = {
+#         "User-Agent": "Mozilla/5.0",
+#         "Accept-Language": "en-US,en;q=0.9",
+#         "Accept": "*/*",
+#         "Referer": "https://www.nseindia.com/",
+#         "Connection": "keep-alive"
+#     }
+#     session.headers.update(headers)
+#     try:
+#         session.get("https://www.nseindia.com/option-chain", timeout=5)
+#     except Exception as e:
+#         print("⚠️ Error establishing session:", e)
+#     return session
+
+# def compute_pcr_flag(row):
+#     if pd.isna(row['PCR_5DAY_AVG']):
+#         return "0"
+#     if row['PCR_RATIO'] > row['PCR_5DAY_AVG'] + 0.2:
+#         return "1"
+#     elif row['PCR_RATIO'] < row['PCR_5DAY_AVG'] - 0.2:
+#         return "-1"
+#     return "0"
+
+# def compute_label(row):
+#     if row['PCR_RATIO'] > 1.2 and row['PCR_flag'] == "1":
+#         return "sell"
+#     elif row['PCR_RATIO'] < 0.8 and row['PCR_flag'] == "-1":
+#         return "buy"
+#     else:
+#         return "hold"
+
+# def fetch_option_chain_data(session, symbol):
+#     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+#     try:
+#         response = session.get(url, timeout=10)
+#         response.raise_for_status()
+#         return response.json()
+#     except Exception as e:
+#         print(f"❌ Error fetching data for {symbol}: {e}")
+#         return None
+
+# def analyze_oi_data(data, symbol):
+#     records = data.get("records", {}).get("data", [])
+#     expiry = data.get("records", {}).get("expiryDates", ["N/A"])[0]
+#     # Use symbol as company name to avoid UNKNOWN
+#     company = symbol
+
+#     # try:
+#     #     expiry = datetime.strptime(expiry, "%d-%b-%Y").strftime("%Y-%m-%d")
+#     # except Exception:
+#     #     expiry = expiry  # fallback if format doesn't match
+
+#     pe_oi, ce_oi, pe_vol, ce_vol = 0, 0, 0, 0
+#     for item in records:
+#         if item.get("expiryDate") != expiry:
+#             continue
+#         if "CE" in item:
+#             ce = item["CE"]
+#             ce_oi += ce.get("openInterest", 0)
+#             ce_vol += ce.get("totalTradedVolume", 0)
+#         if "PE" in item:
+#             pe = item["PE"]
+#             pe_oi += pe.get("openInterest", 0)
+#             pe_vol += pe.get("totalTradedVolume", 0)
+
+#     if ce_oi == 0:
+#         ce_oi = 1e-8
+
+#     pcr = round(pe_oi / ce_oi, 2) if ce_oi else 0
+
+#     return {
+#         "DATE": datetime.now().strftime("%Y-%m-%d"),
+#         "COMPANY": company,
+#         # Removed SYMBOL key here
+#         "PUT_CONTRACTS": pe_vol,
+#         "CALL_CONTRACTS": ce_vol,
+#         "PCR_RATIO": pcr,
+#         "EXPIRY_DATE": expiry
+#     }
+
+# def generate_live_data(symbols):
+#     session = create_nse_session()
+#     results = []
+#     for symbol in symbols:
+#         print(f"Fetching live data for {symbol}...")
+#         data = fetch_option_chain_data(session, symbol)
+#         if data:
+#             result = analyze_oi_data(data, symbol)
+#             if result:
+#                 results.append(result)
+#             else:
+#                 print(f"Skipped {symbol} due to incomplete data.")
+#         else:
+#             print(f"No data for {symbol}")
+#         time.sleep(1.5)
+#     return pd.DataFrame(results)
+
+# def update_existing_excel(historical_path, live_df):
+#     today = pd.to_datetime(datetime.now().date())
+#     historical_data = pd.read_excel(historical_path, sheet_name=None)
+
+#     # Update sheets in memory
+#     for company in live_df["COMPANY"].unique():
+#         if company not in historical_data:
+#             print(f"Skipping {company}, not in historical file")
+#             continue
+
+#         hist_df = historical_data[company]
+#         hist_df["DATE"] = pd.to_datetime(hist_df["DATE"])
+
+#         if today in hist_df["DATE"].values:
+#             print(f"{company} already updated for today, skipping")
+#             continue
+
+#         new_row = live_df[live_df["COMPANY"] == company].copy()
+#         new_row["DATE"] = pd.to_datetime(new_row["DATE"])
+
+#         # Append new row and sort
+#         updated_df = pd.concat([hist_df, new_row], ignore_index=True).sort_values("DATE")
+
+#         # Calculate rolling features
+#         updated_df["PCR_5DAY_AVG"] = updated_df["PCR_RATIO"].rolling(window=5).mean()
+#         updated_df["PCR_VS_5DAY_AVG"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).round(4)
+#         updated_df["PCR_deviation"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).abs().round(4)
+#         updated_df["PCR_ZSCORE"] = (
+#             (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]) /
+#             updated_df["PCR_RATIO"].rolling(5).std()
+#         )
+#         updated_df["PCR_SPIKE_DIP_SIGNAL"] = updated_df["PCR_ZSCORE"].apply(
+#             lambda z: "Spike" if z > 2 else "Dip" if z < -2 else "Normal"
+#         )
+
+#         # Compute PCR_flag
+#         updated_df['PCR_flag'] = updated_df.apply(compute_pcr_flag, axis=1)
+
+#         # Compute label based on PCR_flag and PCR_RATIO
+#         updated_df['label'] = updated_df.apply(compute_label, axis=1)
+
+
+#         historical_data[company] = updated_df
+
+#     # Write back all sheets to Excel
+#     with pd.ExcelWriter(historical_path, engine="openpyxl", mode='w') as writer:
+#         for sheet_name, df in historical_data.items():
+#             df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+
+#     print(f"✅ Historical Excel updated at {historical_path}")
+
+# if __name__ == "__main__":
+#     symbols = [
+#         "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
+#         "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
+#         "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
+#         "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
+#         "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
+#         "IOC", "UPL", "EICHERMOT"
+#     ]
+
+#     live_df = generate_live_data(symbols)
+#     if not live_df.empty:
+#         update_existing_excel(historical_file, live_df)
+#     else:
+#         print("No live data fetched")
+
+#============================================================================================================================TRY3============================================================================================================
+
+
 import pandas as pd
+import cloudscraper  # ✅ Replaced requests
 from datetime import datetime
 import time
 
-historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
+historical_file = r"C:\Users\Admin\Downloads\Nifty50-Intelligent-Daily-Updates-main\Databases\Nifty_50_PCR_Hisotrical_Data.xlsx"
 
 def create_nse_session():
-    session = requests.Session()
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "*/*",
-        "Referer": "https://www.nseindia.com/",
-        "Connection": "keep-alive"
-    }
-    session.headers.update(headers)
+    scraper = cloudscraper.create_scraper()
     try:
-        session.get("https://www.nseindia.com/option-chain", timeout=5)
+        scraper.get("https://www.nseindia.com", timeout=5)
     except Exception as e:
         print("⚠️ Error establishing session:", e)
-    return session
+    return scraper
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -232,13 +400,7 @@ def fetch_option_chain_data(session, symbol):
 def analyze_oi_data(data, symbol):
     records = data.get("records", {}).get("data", [])
     expiry = data.get("records", {}).get("expiryDates", ["N/A"])[0]
-    # Use symbol as company name to avoid UNKNOWN
     company = symbol
-
-    # try:
-    #     expiry = datetime.strptime(expiry, "%d-%b-%Y").strftime("%Y-%m-%d")
-    # except Exception:
-    #     expiry = expiry  # fallback if format doesn't match
 
     pe_oi, ce_oi, pe_vol, ce_vol = 0, 0, 0, 0
     for item in records:
@@ -261,7 +423,6 @@ def analyze_oi_data(data, symbol):
     return {
         "DATE": datetime.now().strftime("%Y-%m-%d"),
         "COMPANY": company,
-        # Removed SYMBOL key here
         "PUT_CONTRACTS": pe_vol,
         "CALL_CONTRACTS": ce_vol,
         "PCR_RATIO": pcr,
@@ -289,7 +450,6 @@ def update_existing_excel(historical_path, live_df):
     today = pd.to_datetime(datetime.now().date())
     historical_data = pd.read_excel(historical_path, sheet_name=None)
 
-    # Update sheets in memory
     for company in live_df["COMPANY"].unique():
         if company not in historical_data:
             print(f"Skipping {company}, not in historical file")
@@ -305,10 +465,8 @@ def update_existing_excel(historical_path, live_df):
         new_row = live_df[live_df["COMPANY"] == company].copy()
         new_row["DATE"] = pd.to_datetime(new_row["DATE"])
 
-        # Append new row and sort
         updated_df = pd.concat([hist_df, new_row], ignore_index=True).sort_values("DATE")
 
-        # Calculate rolling features
         updated_df["PCR_5DAY_AVG"] = updated_df["PCR_RATIO"].rolling(window=5).mean()
         updated_df["PCR_VS_5DAY_AVG"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).round(4)
         updated_df["PCR_deviation"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).abs().round(4)
@@ -320,16 +478,11 @@ def update_existing_excel(historical_path, live_df):
             lambda z: "Spike" if z > 2 else "Dip" if z < -2 else "Normal"
         )
 
-        # Compute PCR_flag
         updated_df['PCR_flag'] = updated_df.apply(compute_pcr_flag, axis=1)
-
-        # Compute label based on PCR_flag and PCR_RATIO
         updated_df['label'] = updated_df.apply(compute_label, axis=1)
-
 
         historical_data[company] = updated_df
 
-    # Write back all sheets to Excel
     with pd.ExcelWriter(historical_path, engine="openpyxl", mode='w') as writer:
         for sheet_name, df in historical_data.items():
             df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
@@ -351,7 +504,6 @@ if __name__ == "__main__":
         update_existing_excel(historical_file, live_df)
     else:
         print("No live data fetched")
-
 
 
 
