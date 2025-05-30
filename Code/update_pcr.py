@@ -354,21 +354,14 @@
 
 #============================================================================================================================TRY3============================================================================================================
 
-
 import pandas as pd
-import cloudscraper  # ✅ Replaced requests
+from jugaad_data.nse import NSELive
 from datetime import datetime
 import time
+import warnings
+warnings.filterwarnings("ignore")
 
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
-
-def create_nse_session():
-    scraper = cloudscraper.create_scraper()
-    try:
-        scraper.get("https://www.nseindia.com", timeout=5)
-    except Exception as e:
-        print("⚠️ Error establishing session:", e)
-    return scraper
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -387,20 +380,18 @@ def compute_label(row):
     else:
         return "hold"
 
-def fetch_option_chain_data(session, symbol):
-    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+def fetch_option_chain_jugaad(symbol):
     try:
-        response = session.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        live = NSELive()
+        data = live.option_chain_equity(symbol)
+        return data
     except Exception as e:
         print(f"❌ Error fetching data for {symbol}: {e}")
         return None
 
-def analyze_oi_data(data, symbol):
+def analyze_oi_data_jugaad(data, symbol):
     records = data.get("records", {}).get("data", [])
     expiry = data.get("records", {}).get("expiryDates", ["N/A"])[0]
-    company = symbol
 
     pe_oi, ce_oi, pe_vol, ce_vol = 0, 0, 0, 0
     for item in records:
@@ -415,14 +406,12 @@ def analyze_oi_data(data, symbol):
             pe_oi += pe.get("openInterest", 0)
             pe_vol += pe.get("totalTradedVolume", 0)
 
-    if ce_oi == 0:
-        ce_oi = 1e-8
-
-    pcr = round(pe_oi / ce_oi, 2) if ce_oi else 0
+    ce_oi = ce_oi if ce_oi != 0 else 1e-8
+    pcr = round(pe_oi / ce_oi, 2)
 
     return {
         "DATE": datetime.now().strftime("%Y-%m-%d"),
-        "COMPANY": company,
+        "COMPANY": symbol,
         "PUT_CONTRACTS": pe_vol,
         "CALL_CONTRACTS": ce_vol,
         "PCR_RATIO": pcr,
@@ -430,19 +419,15 @@ def analyze_oi_data(data, symbol):
     }
 
 def generate_live_data(symbols):
-    session = create_nse_session()
     results = []
     for symbol in symbols:
-        print(f"Fetching live data for {symbol}...")
-        data = fetch_option_chain_data(session, symbol)
+        print(f"🔄 Fetching live data for {symbol}...")
+        data = fetch_option_chain_jugaad(symbol)
         if data:
-            result = analyze_oi_data(data, symbol)
-            if result:
-                results.append(result)
-            else:
-                print(f"Skipped {symbol} due to incomplete data.")
+            result = analyze_oi_data_jugaad(data, symbol)
+            results.append(result)
         else:
-            print(f"No data for {symbol}")
+            print(f"❌ Skipping {symbol} due to fetch failure.")
         time.sleep(1.5)
     return pd.DataFrame(results)
 
@@ -452,14 +437,14 @@ def update_existing_excel(historical_path, live_df):
 
     for company in live_df["COMPANY"].unique():
         if company not in historical_data:
-            print(f"Skipping {company}, not in historical file")
+            print(f"⚠️ Skipping {company}, not in historical file")
             continue
 
         hist_df = historical_data[company]
         hist_df["DATE"] = pd.to_datetime(hist_df["DATE"])
 
         if today in hist_df["DATE"].values:
-            print(f"{company} already updated for today, skipping")
+            print(f"✅ {company} already updated for today, skipping")
             continue
 
         new_row = live_df[live_df["COMPANY"] == company].copy()
@@ -487,7 +472,7 @@ def update_existing_excel(historical_path, live_df):
         for sheet_name, df in historical_data.items():
             df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
-    print(f"✅ Historical Excel updated at {historical_path}")
+    print(f"📊 Excel database updated at {historical_path}")
 
 if __name__ == "__main__":
     symbols = [
@@ -503,11 +488,4 @@ if __name__ == "__main__":
     if not live_df.empty:
         update_existing_excel(historical_file, live_df)
     else:
-        print("No live data fetched")
-
-
-
-
-
-
-
+        print("⚠️ No live data fetched")
