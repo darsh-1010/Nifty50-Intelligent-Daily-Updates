@@ -354,12 +354,10 @@
 
 #============================================================================================================================TRY3============================================================================================================
 
-import pandas as pd
-from jugaad_data.nse import NSELive
+iimport pandas as pd
 from datetime import datetime
 import time
-import warnings
-warnings.filterwarnings("ignore")
+from jugaad_data.nse import NSEOptionChain
 
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
@@ -382,31 +380,34 @@ def compute_label(row):
 
 def fetch_option_chain_jugaad(symbol):
     try:
-        live = NSELive()
-        data = live.option_chain_equity(symbol)
+        data = NSEOptionChain(symbol).get_option_chain_data()
         return data
     except Exception as e:
         print(f"❌ Error fetching data for {symbol}: {e}")
         return None
 
-def analyze_oi_data_jugaad(data, symbol):
-    records = data.get("records", {}).get("data", [])
-    expiry = data.get("records", {}).get("expiryDates", ["N/A"])[0]
+def analyze_oi_data(data, symbol):
+    # Get nearest expiry
+    expiry_dates = sorted(set(data['expiryDate']))
+    if not expiry_dates:
+        return None
+    expiry = expiry_dates[0]
 
-    pe_oi, ce_oi, pe_vol, ce_vol = 0, 0, 0, 0
-    for item in records:
-        if item.get("expiryDate") != expiry:
+    pe_oi = ce_oi = pe_vol = ce_vol = 0
+
+    for _, row in data.iterrows():
+        if row['expiryDate'] != expiry:
             continue
-        if "CE" in item:
-            ce = item["CE"]
-            ce_oi += ce.get("openInterest", 0)
-            ce_vol += ce.get("totalTradedVolume", 0)
-        if "PE" in item:
-            pe = item["PE"]
-            pe_oi += pe.get("openInterest", 0)
-            pe_vol += pe.get("totalTradedVolume", 0)
+        if not pd.isna(row.get('PE OI')):
+            pe_oi += int(row.get('PE OI', 0))
+            pe_vol += int(row.get('PE Volume', 0))
+        if not pd.isna(row.get('CE OI')):
+            ce_oi += int(row.get('CE OI', 0))
+            ce_vol += int(row.get('CE Volume', 0))
 
-    ce_oi = ce_oi if ce_oi != 0 else 1e-8
+    if ce_oi == 0:
+        ce_oi = 1e-8
+
     pcr = round(pe_oi / ce_oi, 2)
 
     return {
@@ -423,12 +424,15 @@ def generate_live_data(symbols):
     for symbol in symbols:
         print(f"🔄 Fetching live data for {symbol}...")
         data = fetch_option_chain_jugaad(symbol)
-        if data:
-            result = analyze_oi_data_jugaad(data, symbol)
-            results.append(result)
+        if data is not None and not data.empty:
+            result = analyze_oi_data(data, symbol)
+            if result:
+                results.append(result)
+            else:
+                print(f"⚠️ Skipped {symbol} due to incomplete data.")
         else:
-            print(f"❌ Skipping {symbol} due to fetch failure.")
-        time.sleep(1.5)
+            print(f"❌ No data for {symbol}")
+        time.sleep(1.5)  # to avoid rate-limiting
     return pd.DataFrame(results)
 
 def update_existing_excel(historical_path, live_df):
@@ -472,7 +476,7 @@ def update_existing_excel(historical_path, live_df):
         for sheet_name, df in historical_data.items():
             df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
-    print(f"📊 Excel database updated at {historical_path}")
+    print(f"✅ Historical Excel updated at {historical_path}")
 
 if __name__ == "__main__":
     symbols = [
@@ -488,4 +492,4 @@ if __name__ == "__main__":
     if not live_df.empty:
         update_existing_excel(historical_file, live_df)
     else:
-        print("⚠️ No live data fetched")
+        print("❌ No live data fetched.")
