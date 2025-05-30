@@ -357,27 +357,32 @@
 import pandas as pd
 from datetime import datetime
 import time
+import cfscrape
 import requests
 
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-def get_primed_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        )
-    })
-    try:
-        response = session.get("https://www.nseindia.com", timeout=10)
-        if response.status_code != 200:
-            raise Exception("Failed to prime session with NSE")
-        time.sleep(2)
-    except Exception as e:
-        print(f"❌ Error priming session: {e}")
-    return session
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nseindia.com/",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+def get_primed_scraper():
+    scraper = cfscrape.create_scraper(delay=10, browser={'custom': HEADERS["User-Agent"]})
+    # Prime session by accessing main NSE page (to get cookies)
+    resp = scraper.get("https://www.nseindia.com", headers=HEADERS)
+    if resp.status_code != 200:
+        raise Exception(f"Failed to prime session, status code: {resp.status_code}")
+    time.sleep(2)
+    return scraper
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -396,28 +401,24 @@ def compute_label(row):
     else:
         return "hold"
 
-def fetch_option_chain(symbol, session):
-    try:
-        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Referer": "https://www.nseindia.com/option-chain",
-            "X-Requested-With": "XMLHttpRequest",
-            "Connection": "keep-alive"
-        }
-        response = session.get(url, headers=headers, timeout=10)
-        if response.status_code == 403:
-            raise Exception("403 Forbidden - likely blocked by NSE")
-        return response.json()
-    except Exception as e:
-        print(f"❌ Error fetching data for {symbol}: {e}")
-        return None
+def fetch_option_chain(symbol, scraper, max_retries=5):
+    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    for attempt in range(1, max_retries+1):
+        try:
+            resp = scraper.get(url, headers=HEADERS, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+            elif resp.status_code == 403:
+                print(f"⚠️ HTTP 403 for {symbol}, attempt {attempt}/{max_retries}. Retrying after delay...")
+                time.sleep(3 * attempt)  # Increasing delay before retry
+            else:
+                print(f"⚠️ HTTP {resp.status_code} for {symbol}, attempt {attempt}/{max_retries}")
+                time.sleep(2)
+        except Exception as e:
+            print(f"❌ Exception for {symbol} attempt {attempt}/{max_retries}: {e}")
+            time.sleep(3)
+    print(f"❌ Failed to fetch data for {symbol} after {max_retries} attempts.")
+    return None
 
 def analyze_oi_data(json_data, symbol):
     try:
@@ -442,7 +443,7 @@ def analyze_oi_data(json_data, symbol):
                 ce_vol += ce_data.get("totalTradedVolume", 0)
 
         if ce_oi == 0:
-            ce_oi = 1e-8
+            ce_oi = 1e-8  # Avoid division by zero
         pcr = round(pe_oi / ce_oi, 2)
 
         return {
@@ -458,11 +459,11 @@ def analyze_oi_data(json_data, symbol):
         return None
 
 def generate_live_data(symbols):
+    scraper = get_primed_scraper()
     results = []
-    session = get_primed_session()
-    for i, symbol in enumerate(symbols):
+    for symbol in symbols:
         print(f"🔄 Fetching live data for {symbol}...")
-        json_data = fetch_option_chain(symbol, session)
+        json_data = fetch_option_chain(symbol, scraper)
         if json_data:
             result = analyze_oi_data(json_data, symbol)
             if result:
@@ -471,11 +472,7 @@ def generate_live_data(symbols):
                 print(f"⚠️ Skipped {symbol} due to incomplete data.")
         else:
             print(f"❌ No data for {symbol}")
-        time.sleep(4.0)  # Longer delay for GitHub IPs
-
-        # Rotate session every 10 requests
-        if (i + 1) % 10 == 0:
-            session = get_primed_session()
+        time.sleep(2)  # polite delay between symbols
     return pd.DataFrame(results)
 
 def update_existing_excel(historical_path, live_df):
@@ -526,7 +523,7 @@ if __name__ == "__main__":
         "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
         "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
         "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
+        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
         "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
         "IOC", "UPL", "EICHERMOT"
     ]
