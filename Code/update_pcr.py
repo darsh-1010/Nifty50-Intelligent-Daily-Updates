@@ -357,74 +357,54 @@ import pandas as pd
 import requests
 import zipfile
 import io
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
+import os
 
-# Relative path to your Excel file
+# Path to historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# NSE Holidays next 5 years
-NSE_HOLIDAYS = {
+# NSE trading holidays (next 5 years)
+HOLIDAYS = set(pd.to_datetime([
     "2025-02-26", "2025-03-14", "2025-03-31", "2025-04-10", "2025-04-14", "2025-04-18", "2025-05-01",
     "2025-08-15", "2025-08-27", "2025-10-02", "2025-10-21", "2025-10-22", "2025-11-05", "2025-12-25",
-
     "2026-01-26", "2026-02-15", "2026-03-03", "2026-03-21", "2026-03-27", "2026-03-31", "2026-04-03",
     "2026-04-14", "2026-05-01", "2026-05-27", "2026-06-26", "2026-08-15", "2026-09-14", "2026-10-02",
     "2026-10-20", "2026-11-08", "2026-11-09", "2026-11-24", "2026-12-25",
-
     "2027-01-26", "2027-02-05", "2027-03-23", "2027-03-30", "2027-04-02", "2027-04-14", "2027-04-15",
     "2027-04-29", "2027-05-01", "2027-07-17", "2027-08-15", "2027-09-02", "2027-10-11", "2027-10-19",
     "2027-10-20", "2027-11-15", "2027-11-16", "2027-12-25",
-
     "2028-01-26", "2028-02-23", "2028-03-12", "2028-03-20", "2028-03-29", "2028-04-06", "2028-04-14",
     "2028-04-24", "2028-05-01", "2028-07-06", "2028-08-15", "2028-09-20", "2028-10-02", "2028-10-30",
     "2028-11-07", "2028-11-08", "2028-12-25"
-}
+]))
 
 def is_trading_day(date):
-    # Weekends are not trading days
-    if date.weekday() >= 5:
-        return False
-    # Check if date is holiday
-    if date.strftime("%Y-%m-%d") in NSE_HOLIDAYS:
-        return False
-    return True
+    return date.weekday() < 5 and date not in HOLIDAYS
 
-def get_previous_trading_day(date):
-    prev_day = date - timedelta(days=1)
-    while not is_trading_day(prev_day):
-        prev_day -= timedelta(days=1)
-    return prev_day
-
-def get_effective_date():
+def get_last_trading_day():
     now = datetime.now()
-    today = now.date()
-    cutoff_time = time(17, 0)  # 5 PM cutoff
-    
-    if now.time() < cutoff_time or not is_trading_day(today):
-        # Before 5 PM or today not trading day → get previous trading day
-        effective_date = get_previous_trading_day(today)
-    else:
-        # After 5 PM and trading day → today
-        effective_date = today
-    
-    return effective_date
+    date = now.date()
+    if now.hour < 17:
+        date -= timedelta(days=1)
+    while not is_trading_day(date):
+        date -= timedelta(days=1)
+    return date
 
-def get_archive_url(date):
-    """Generate the URL for the daily F&O bhavcopy zip."""
-    return f"https://archives.nseindia.com/content/historical/DERIVATIVES/{date:%Y}/{date:%b}/fo{date:%d%b%Y}bhav.csv.zip"
+def get_udiff_url(date):
+    return f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{date:%Y%m%d}_F_0000.csv.zip"
 
-def download_fo_bhavcopy(date):
-    url = get_archive_url(date)
+def download_udiff_zip(date):
+    url = get_udiff_url(date)
     print(f"📥 Downloading: {url}")
     try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            for file in z.namelist():
-                if file.endswith(".csv"):
-                    return pd.read_csv(z.open(file))
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        response.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            for name in z.namelist():
+                if name.endswith(".csv"):
+                    return pd.read_csv(z.open(name))
     except Exception as e:
-        print("❌ Failed to fetch archive:", e)
+        print("❌ Failed to download or extract UDiFF file:", e)
         return None
 
 def compute_pcr_flag(row):
@@ -443,12 +423,10 @@ def compute_label(row):
         return "buy"
     return "hold"
 
-def generate_pcr_data_from_bhavcopy(df, symbols, date):
-    date_str = date.strftime("%Y-%m-%d")
+def generate_pcr_data(df, symbols, date):
     df = df[df['INSTRUMENT'] == 'OPTSTK']
     df = df[df['SYMBOL'].isin(symbols)]
-
-    df['DATE'] = date_str
+    df['DATE'] = date.strftime("%Y-%m-%d")
     df['EXPIRY_DT'] = pd.to_datetime(df['EXPIRY_DT']).dt.strftime('%Y-%m-%d')
 
     results = []
@@ -465,14 +443,12 @@ def generate_pcr_data_from_bhavcopy(df, symbols, date):
         pe_oi = pe['OPEN_INT'].sum()
         ce_vol = ce['VOL'].sum()
         pe_vol = pe['VOL'].sum()
-
         if ce_oi == 0:
             ce_oi = 1e-8
 
         pcr = round(pe_oi / ce_oi, 2)
-
         results.append({
-            "DATE": date_str,
+            "DATE": date.strftime("%Y-%m-%d"),
             "COMPANY": symbol,
             "PUT_CONTRACTS": pe_vol,
             "CALL_CONTRACTS": ce_vol,
@@ -482,20 +458,20 @@ def generate_pcr_data_from_bhavcopy(df, symbols, date):
 
     return pd.DataFrame(results)
 
-def update_existing_excel(historical_path, live_df):
-    today = pd.to_datetime(datetime.now().date())
-    historical_data = pd.read_excel(historical_path, sheet_name=None)
+def update_excel(file_path, live_df):
+    today = pd.to_datetime(live_df["DATE"].iloc[0])
+    historical_data = pd.read_excel(file_path, sheet_name=None)
 
     for company in live_df["COMPANY"].unique():
         if company not in historical_data:
-            print(f"Skipping {company}, not in historical file")
+            print(f"Skipping {company}, not found in historical file")
             continue
 
         hist_df = historical_data[company]
         hist_df["DATE"] = pd.to_datetime(hist_df["DATE"])
 
         if today in hist_df["DATE"].values:
-            print(f"{company} already updated for today, skipping")
+            print(f"{company} already updated for {today.date()}, skipping")
             continue
 
         new_row = live_df[live_df["COMPANY"] == company].copy()
@@ -504,7 +480,6 @@ def update_existing_excel(historical_path, live_df):
         updated_df = pd.concat([hist_df, new_row], ignore_index=True).sort_values("DATE")
 
         updated_df["PCR_5DAY_AVG"] = updated_df["PCR_RATIO"].rolling(window=5).mean()
-        updated_df["PCR_VS_5DAY_AVG"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).round(4)
         updated_df["PCR_deviation"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).abs().round(4)
         updated_df["PCR_ZSCORE"] = (
             (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]) /
@@ -518,31 +493,29 @@ def update_existing_excel(historical_path, live_df):
 
         historical_data[company] = updated_df
 
-    with pd.ExcelWriter(historical_path, engine="openpyxl", mode='w') as writer:
-        for sheet_name, df in historical_data.items():
-            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    with pd.ExcelWriter(file_path, engine="openpyxl", mode='w') as writer:
+        for sheet, df in historical_data.items():
+            df.to_excel(writer, sheet_name=sheet[:31], index=False)
 
-    print(f"✅ Historical Excel updated at {historical_path}")
+    print("✅ Excel file updated successfully.")
 
 if __name__ == "__main__":
     symbols = [
         "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
         "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
         "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
+        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
         "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
         "IOC", "UPL", "EICHERMOT"
     ]
 
-    effective_date = get_effective_date()
-    print(f"Using bhavcopy for date: {effective_date}")
-
-    bhav_df = download_fo_bhavcopy(effective_date)
+    trade_date = get_last_trading_day()
+    bhav_df = download_udiff_zip(trade_date)
     if bhav_df is not None:
-        live_df = generate_pcr_data_from_bhavcopy(bhav_df, symbols, effective_date)
+        live_df = generate_pcr_data(bhav_df, symbols, trade_date)
         if not live_df.empty:
-            update_existing_excel(historical_file, live_df)
+            update_excel(historical_file, live_df)
         else:
-            print("⚠️ No relevant data found in bhavcopy.")
+            print("⚠️ No matching option data found.")
     else:
-        print("⚠️ Bhavcopy not available or could not be downloaded.")
+        print("⚠️ Failed to retrieve or parse UDiFF ZIP.")
