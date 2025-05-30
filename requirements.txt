@@ -8,4 +8,4 @@ transformers
 requests
 xlsxwriter
 openpyxl
-cloudscrapper
+jugaad-data
