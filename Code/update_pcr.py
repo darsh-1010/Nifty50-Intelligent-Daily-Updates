@@ -355,32 +355,38 @@
 #============================================================================================================================TRY3============================================================================================================
 
 import pandas as pd
+import requests
 from datetime import datetime
 import time
-import requests
+from bs4 import BeautifulSoup
 
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Referer": "https://www.nseindia.com/"
-}
-
 def get_primed_session():
     session = requests.Session()
-    session.headers.update(HEADERS)
-    response = session.get("https://www.nseindia.com")
-    if response.status_code != 200:
-        raise Exception("Failed to prime session with NSE")
-    time.sleep(1.5)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    session.headers.update(headers)
+    try:
+        session.get("https://www.nseindia.com", timeout=10)
+    except Exception as e:
+        print(f"⚠️ Error priming session: {e}")
     return session
+
+def fetch_option_chain(symbol, session):
+    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    try:
+        response = session.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"⚠️ HTTP {response.status_code} for {symbol}")
+    except Exception as e:
+        print(f"❌ Error fetching data for {symbol}: {e}")
+    return None
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -399,58 +405,47 @@ def compute_label(row):
     else:
         return "hold"
 
-def fetch_option_chain(symbol, session):
-    try:
-        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-        response = session.get(url)
-        if response.status_code != 200:
-            raise Exception(f"Status code: {response.status_code}")
-        return response.json()
-    except Exception as e:
-        print(f"❌ Error fetching data for {symbol}: {e}")
-        return None
-
 def analyze_oi_data(json_data, symbol):
-    try:
-        records = json_data.get("records", {}).get("data", [])
-        expiry_dates = sorted(set(record['expiryDate'] for record in records if 'expiryDate' in record))
-        if not expiry_dates:
-            return None
-        expiry = expiry_dates[0]
-
-        pe_oi = ce_oi = pe_vol = ce_vol = 0
-        for record in records:
-            if record.get("expiryDate") != expiry:
-                continue
-            ce_data = record.get("CE")
-            pe_data = record.get("PE")
-
-            if pe_data:
-                pe_oi += pe_data.get("openInterest", 0)
-                pe_vol += pe_data.get("totalTradedVolume", 0)
-            if ce_data:
-                ce_oi += ce_data.get("openInterest", 0)
-                ce_vol += ce_data.get("totalTradedVolume", 0)
-
-        if ce_oi == 0:
-            ce_oi = 1e-8
-        pcr = round(pe_oi / ce_oi, 2)
-
-        return {
-            "DATE": datetime.now().strftime("%Y-%m-%d"),
-            "COMPANY": symbol,
-            "PUT_CONTRACTS": pe_vol,
-            "CALL_CONTRACTS": ce_vol,
-            "PCR_RATIO": pcr,
-            "EXPIRY_DATE": expiry
-        }
-    except Exception as e:
-        print(f"⚠️ Error processing data for {symbol}: {e}")
+    records = json_data.get("records", {})
+    if not records:
         return None
+
+    expiry_dates = sorted(set(records.get("expiryDates", [])))
+    if not expiry_dates:
+        return None
+    expiry = expiry_dates[0]
+
+    data = records.get("data", [])
+    ce_oi = ce_vol = pe_oi = pe_vol = 0
+
+    for row in data:
+        ce = row.get("CE")
+        pe = row.get("PE")
+        if ce and ce.get("expiryDate") == expiry:
+            ce_oi += ce.get("openInterest", 0)
+            ce_vol += ce.get("totalTradedVolume", 0)
+        if pe and pe.get("expiryDate") == expiry:
+            pe_oi += pe.get("openInterest", 0)
+            pe_vol += pe.get("totalTradedVolume", 0)
+
+    if ce_oi == 0:
+        ce_oi = 1e-8
+
+    pcr = round(pe_oi / ce_oi, 2)
+
+    return {
+        "DATE": datetime.now().strftime("%Y-%m-%d"),
+        "COMPANY": symbol,
+        "PUT_CONTRACTS": pe_vol,
+        "CALL_CONTRACTS": ce_vol,
+        "PCR_RATIO": pcr,
+        "EXPIRY_DATE": expiry
+    }
 
 def generate_live_data(symbols):
     session = get_primed_session()
     results = []
+
     for symbol in symbols:
         print(f"🔄 Fetching live data for {symbol}...")
         json_data = fetch_option_chain(symbol, session)
@@ -462,7 +457,7 @@ def generate_live_data(symbols):
                 print(f"⚠️ Skipped {symbol} due to incomplete data.")
         else:
             print(f"❌ No data for {symbol}")
-        time.sleep(1.5)
+        time.sleep(1.5)  # To avoid being blocked by NSE
     return pd.DataFrame(results)
 
 def update_existing_excel(historical_path, live_df):
@@ -513,7 +508,7 @@ if __name__ == "__main__":
         "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
         "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
         "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
+        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
         "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
         "IOC", "UPL", "EICHERMOT"
     ]
