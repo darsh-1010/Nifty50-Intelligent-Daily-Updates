@@ -357,9 +357,30 @@
 import pandas as pd
 from datetime import datetime
 import time
-from jugaad_data.nse import NSEOptionChain
+import requests
 
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nseindia.com/"
+}
+
+def get_primed_session():
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    response = session.get("https://www.nseindia.com")
+    if response.status_code != 200:
+        raise Exception("Failed to prime session with NSE")
+    time.sleep(1.5)
+    return session
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -378,61 +399,70 @@ def compute_label(row):
     else:
         return "hold"
 
-def fetch_option_chain_jugaad(symbol):
+def fetch_option_chain(symbol, session):
     try:
-        data = NSEOptionChain(symbol).get_option_chain_data()
-        return data
+        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+        response = session.get(url)
+        if response.status_code != 200:
+            raise Exception(f"Status code: {response.status_code}")
+        return response.json()
     except Exception as e:
         print(f"❌ Error fetching data for {symbol}: {e}")
         return None
 
-def analyze_oi_data(data, symbol):
-    # Get nearest expiry
-    expiry_dates = sorted(set(data['expiryDate']))
-    if not expiry_dates:
+def analyze_oi_data(json_data, symbol):
+    try:
+        records = json_data.get("records", {}).get("data", [])
+        expiry_dates = sorted(set(record['expiryDate'] for record in records if 'expiryDate' in record))
+        if not expiry_dates:
+            return None
+        expiry = expiry_dates[0]
+
+        pe_oi = ce_oi = pe_vol = ce_vol = 0
+        for record in records:
+            if record.get("expiryDate") != expiry:
+                continue
+            ce_data = record.get("CE")
+            pe_data = record.get("PE")
+
+            if pe_data:
+                pe_oi += pe_data.get("openInterest", 0)
+                pe_vol += pe_data.get("totalTradedVolume", 0)
+            if ce_data:
+                ce_oi += ce_data.get("openInterest", 0)
+                ce_vol += ce_data.get("totalTradedVolume", 0)
+
+        if ce_oi == 0:
+            ce_oi = 1e-8
+        pcr = round(pe_oi / ce_oi, 2)
+
+        return {
+            "DATE": datetime.now().strftime("%Y-%m-%d"),
+            "COMPANY": symbol,
+            "PUT_CONTRACTS": pe_vol,
+            "CALL_CONTRACTS": ce_vol,
+            "PCR_RATIO": pcr,
+            "EXPIRY_DATE": expiry
+        }
+    except Exception as e:
+        print(f"⚠️ Error processing data for {symbol}: {e}")
         return None
-    expiry = expiry_dates[0]
-
-    pe_oi = ce_oi = pe_vol = ce_vol = 0
-
-    for _, row in data.iterrows():
-        if row['expiryDate'] != expiry:
-            continue
-        if not pd.isna(row.get('PE OI')):
-            pe_oi += int(row.get('PE OI', 0))
-            pe_vol += int(row.get('PE Volume', 0))
-        if not pd.isna(row.get('CE OI')):
-            ce_oi += int(row.get('CE OI', 0))
-            ce_vol += int(row.get('CE Volume', 0))
-
-    if ce_oi == 0:
-        ce_oi = 1e-8
-
-    pcr = round(pe_oi / ce_oi, 2)
-
-    return {
-        "DATE": datetime.now().strftime("%Y-%m-%d"),
-        "COMPANY": symbol,
-        "PUT_CONTRACTS": pe_vol,
-        "CALL_CONTRACTS": ce_vol,
-        "PCR_RATIO": pcr,
-        "EXPIRY_DATE": expiry
-    }
 
 def generate_live_data(symbols):
+    session = get_primed_session()
     results = []
     for symbol in symbols:
         print(f"🔄 Fetching live data for {symbol}...")
-        data = fetch_option_chain_jugaad(symbol)
-        if data is not None and not data.empty:
-            result = analyze_oi_data(data, symbol)
+        json_data = fetch_option_chain(symbol, session)
+        if json_data:
+            result = analyze_oi_data(json_data, symbol)
             if result:
                 results.append(result)
             else:
                 print(f"⚠️ Skipped {symbol} due to incomplete data.")
         else:
             print(f"❌ No data for {symbol}")
-        time.sleep(1.5)  # to avoid rate-limiting
+        time.sleep(1.5)
     return pd.DataFrame(results)
 
 def update_existing_excel(historical_path, live_df):
