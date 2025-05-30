@@ -360,7 +360,7 @@ import cloudscraper  # ✅ Replaced requests
 from datetime import datetime
 import time
 
-historical_file = r"C:\Users\Admin\Downloads\Nifty50-Intelligent-Daily-Updates-main\Databases\Nifty_50_PCR_Hisotrical_Data.xlsx"
+historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
 def create_nse_session():
     scraper = cloudscraper.create_scraper()
