@@ -353,183 +353,179 @@
 #         print("No live data fetched")
 
 #============================================================================================================================TRY3============================================================================================================
-
-import pandas as pd
-from datetime import datetime
-import time
-import cfscrape
+import os
 import requests
+import zipfile
+import pandas as pd
+from datetime import datetime, timedelta
+from openpyxl import load_workbook
+import time
 
-historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Referer": "https://www.nseindia.com/",
-    "X-Requested-With": "XMLHttpRequest",
+# ==== Config ====
+EXCEL_DB_PATH = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
+TEMP_DIR = "temp_bhavcopy"
+NIFTY_50_SYMBOLS = {
+    "RELIANCE", "TCS", "HDFC", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
+    "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
+    "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
+    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", "ADANITRANS",
+    "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
+    "IOC", "UPL", "EICHERMOT"
 }
 
-def get_primed_scraper():
-    scraper = cfscrape.create_scraper(delay=10, browser={'custom': HEADERS["User-Agent"]})
-    # Prime session by accessing main NSE page (to get cookies)
-    resp = scraper.get("https://www.nseindia.com", headers=HEADERS)
-    if resp.status_code != 200:
-        raise Exception(f"Failed to prime session, status code: {resp.status_code}")
+# ==== Functions ====
+
+def prime_session():
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com"
+    })
+    r = s.get("https://www.nseindia.com")
+    if r.status_code != 200:
+        raise Exception("Failed to prime NSE session")
     time.sleep(2)
-    return scraper
+    return s
 
-def compute_pcr_flag(row):
-    if pd.isna(row['PCR_5DAY_AVG']):
-        return "0"
-    if row['PCR_RATIO'] > row['PCR_5DAY_AVG'] + 0.2:
-        return "1"
-    elif row['PCR_RATIO'] < row['PCR_5DAY_AVG'] - 0.2:
-        return "-1"
-    return "0"
-
-def compute_label(row):
-    if row['PCR_RATIO'] > 1.2 and row['PCR_flag'] == "1":
-        return "sell"
-    elif row['PCR_RATIO'] < 0.8 and row['PCR_flag'] == "-1":
-        return "buy"
-    else:
-        return "hold"
-
-def fetch_option_chain(symbol, scraper, max_retries=5):
-    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-    for attempt in range(1, max_retries+1):
+def get_last_date_from_excel(path):
+    if not os.path.exists(path):
+        # No existing file, start from an old date
+        return datetime(2020,1,1)
+    xls = pd.ExcelFile(path)
+    all_dates = []
+    for sheet in xls.sheet_names:
         try:
-            resp = scraper.get(url, headers=HEADERS, timeout=15)
-            if resp.status_code == 200:
-                return resp.json()
-            elif resp.status_code == 403:
-                print(f"⚠️ HTTP 403 for {symbol}, attempt {attempt}/{max_retries}. Retrying after delay...")
-                time.sleep(3 * attempt)  # Increasing delay before retry
+            df = pd.read_excel(xls, sheet_name=sheet)
+            if 'DATE' in df.columns:
+                all_dates.append(df['DATE'].max())
+        except Exception:
+            pass
+    if all_dates:
+        return max(all_dates)
+    else:
+        return datetime(2020,1,1)
+
+def download_bhavcopies(session, start_date):
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    today = datetime.today()
+    end_date = today - timedelta(days=1)  # Bhavcopy available till yesterday
+    
+    downloaded = []
+    for single_date in (start_date + timedelta(n) for n in range((end_date - start_date).days + 1)):
+        # Skip weekends
+        if single_date.weekday() >= 5:
+            continue
+        
+        yyyy = single_date.strftime("%Y")
+        mmm = single_date.strftime("%b").upper()
+        dd = single_date.strftime("%d")
+        filename = f"cm{dd}{mmm}{yyyy}bhav.csv.zip"
+        filepath = os.path.join(TEMP_DIR, filename)
+        
+        if os.path.exists(filepath):
+            print(f"Already downloaded: {filename}")
+            downloaded.append(filepath)
+            continue
+        
+        url = f"https://archives.nseindia.com/content/historical/EQUITIES/{yyyy}/{mmm}/{filename}"
+        print(f"Downloading {filename} ...")
+        try:
+            resp = session.get(url, timeout=20)
+            if resp.status_code == 200 and resp.headers.get('Content-Type', '').startswith('application/zip'):
+                with open(filepath, "wb") as f:
+                    f.write(resp.content)
+                print(f"Downloaded {filename}")
+                downloaded.append(filepath)
             else:
-                print(f"⚠️ HTTP {resp.status_code} for {symbol}, attempt {attempt}/{max_retries}")
-                time.sleep(2)
+                print(f"Not found or failed: {filename} (Status {resp.status_code})")
         except Exception as e:
-            print(f"❌ Exception for {symbol} attempt {attempt}/{max_retries}: {e}")
-            time.sleep(3)
-    print(f"❌ Failed to fetch data for {symbol} after {max_retries} attempts.")
-    return None
+            print(f"Error downloading {filename}: {e}")
+        time.sleep(2)  # be polite to server
+    
+    return downloaded
 
-def analyze_oi_data(json_data, symbol):
-    try:
-        records = json_data.get("records", {}).get("data", [])
-        expiry_dates = sorted(set(record['expiryDate'] for record in records if 'expiryDate' in record))
-        if not expiry_dates:
-            return None
-        expiry = expiry_dates[0]
+def extract_and_filter_bhavcopy(zip_path):
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        # There should be exactly one CSV inside the ZIP
+        csv_filename = z.namelist()[0]
+        with z.open(csv_filename) as f:
+            df = pd.read_csv(f)
+            df = df[df['SYMBOL'].isin(NIFTY_50_SYMBOLS)].copy()
+            # Extract date from filename, format: cmDDMMMYYYYbhav.csv.zip
+            date_str = os.path.basename(zip_path)[2:9] + os.path.basename(zip_path)[9:13]  # DDMMM + YYYY
+            dt = datetime.strptime(date_str, "%d%b%Y")
+            df['DATE'] = dt
+            # Fix column names if needed (remove leading/trailing spaces)
+            df.columns = df.columns.str.strip()
+            return df
 
-        pe_oi = ce_oi = pe_vol = ce_vol = 0
-        for record in records:
-            if record.get("expiryDate") != expiry:
-                continue
-            ce_data = record.get("CE")
-            pe_data = record.get("PE")
+def append_data_to_excel(excel_path, df):
+    if df.empty:
+        print("No new data to add.")
+        return
+    
+    if not os.path.exists(excel_path):
+        # Create new Excel file with one sheet per symbol
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            for sym in NIFTY_50_SYMBOLS:
+                sym_df = df[df['SYMBOL'] == sym]
+                sym_df.to_excel(writer, sheet_name=sym, index=False)
+        print(f"Created new Excel DB at {excel_path}")
+        return
 
-            if pe_data:
-                pe_oi += pe_data.get("openInterest", 0)
-                pe_vol += pe_data.get("totalTradedVolume", 0)
-            if ce_data:
-                ce_oi += ce_data.get("openInterest", 0)
-                ce_vol += ce_data.get("totalTradedVolume", 0)
+    # File exists - load workbook
+    book = load_workbook(excel_path)
+    writer = pd.ExcelWriter(excel_path, engine='openpyxl')
+    writer.book = book
 
-        if ce_oi == 0:
-            ce_oi = 1e-8  # Avoid division by zero
-        pcr = round(pe_oi / ce_oi, 2)
-
-        return {
-            "DATE": datetime.now().strftime("%Y-%m-%d"),
-            "COMPANY": symbol,
-            "PUT_CONTRACTS": pe_vol,
-            "CALL_CONTRACTS": ce_vol,
-            "PCR_RATIO": pcr,
-            "EXPIRY_DATE": expiry
-        }
-    except Exception as e:
-        print(f"⚠️ Error processing data for {symbol}: {e}")
-        return None
-
-def generate_live_data(symbols):
-    scraper = get_primed_scraper()
-    results = []
-    for symbol in symbols:
-        print(f"🔄 Fetching live data for {symbol}...")
-        json_data = fetch_option_chain(symbol, scraper)
-        if json_data:
-            result = analyze_oi_data(json_data, symbol)
-            if result:
-                results.append(result)
-            else:
-                print(f"⚠️ Skipped {symbol} due to incomplete data.")
+    for sym in NIFTY_50_SYMBOLS:
+        sym_df_new = df[df['SYMBOL'] == sym]
+        if sym_df_new.empty:
+            continue
+        if sym in book.sheetnames:
+            # Load existing data
+            existing_df = pd.read_excel(excel_path, sheet_name=sym)
+            # Combine and drop duplicates by DATE and SYMBOL (safe guard)
+            combined = pd.concat([existing_df, sym_df_new], ignore_index=True)
+            combined.drop_duplicates(subset=['DATE', 'SYMBOL'], inplace=True)
+            combined.sort_values(by='DATE', inplace=True)
         else:
-            print(f"❌ No data for {symbol}")
-        time.sleep(2)  # polite delay between symbols
-    return pd.DataFrame(results)
+            combined = sym_df_new
+        
+        combined.to_excel(writer, sheet_name=sym, index=False)
+        print(f"Updated sheet: {sym} with {len(sym_df_new)} rows")
+    
+    writer.save()
+    writer.close()
+    print(f"Excel DB updated: {excel_path}")
 
-def update_existing_excel(historical_path, live_df):
-    today = pd.to_datetime(datetime.now().date())
-    historical_data = pd.read_excel(historical_path, sheet_name=None)
-
-    for company in live_df["COMPANY"].unique():
-        if company not in historical_data:
-            print(f"⚠️ Skipping {company}, not in historical file")
-            continue
-
-        hist_df = historical_data[company]
-        hist_df["DATE"] = pd.to_datetime(hist_df["DATE"])
-
-        if today in hist_df["DATE"].values:
-            print(f"✅ {company} already updated for today, skipping")
-            continue
-
-        new_row = live_df[live_df["COMPANY"] == company].copy()
-        new_row["DATE"] = pd.to_datetime(new_row["DATE"])
-
-        updated_df = pd.concat([hist_df, new_row], ignore_index=True).sort_values("DATE")
-
-        updated_df["PCR_5DAY_AVG"] = updated_df["PCR_RATIO"].rolling(window=5).mean()
-        updated_df["PCR_VS_5DAY_AVG"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).round(4)
-        updated_df["PCR_deviation"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).abs().round(4)
-        updated_df["PCR_ZSCORE"] = (
-            (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]) /
-            updated_df["PCR_RATIO"].rolling(5).std()
-        )
-        updated_df["PCR_SPIKE_DIP_SIGNAL"] = updated_df["PCR_ZSCORE"].apply(
-            lambda z: "Spike" if z > 2 else "Dip" if z < -2 else "Normal"
-        )
-
-        updated_df['PCR_flag'] = updated_df.apply(compute_pcr_flag, axis=1)
-        updated_df['label'] = updated_df.apply(compute_label, axis=1)
-
-        historical_data[company] = updated_df
-
-    with pd.ExcelWriter(historical_path, engine="openpyxl", mode='w') as writer:
-        for sheet_name, df in historical_data.items():
-            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-
-    print(f"✅ Historical Excel updated at {historical_path}")
+# ==== Main ====
 
 if __name__ == "__main__":
-    symbols = [
-        "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
-        "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
-        "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-        "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
-        "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
-        "IOC", "UPL", "EICHERMOT"
-    ]
+    print("Starting NSE Bhavcopy Download & Update process...")
 
-    live_df = generate_live_data(symbols)
-    if not live_df.empty:
-        update_existing_excel(historical_file, live_df)
-    else:
-        print("❌ No live data fetched.")
+    session = prime_session()
+    last_date = get_last_date_from_excel(EXCEL_DB_PATH)
+    start_date = last_date + timedelta(days=1)
+    print(f"Fetching bhavcopies from {start_date.strftime('%Y-%m-%d')} onwards")
+
+    downloaded_files = download_bhavcopies(session, start_date)
+    if not downloaded_files:
+        print("No new bhavcopies downloaded. Exiting.")
+        exit()
+
+    combined_df = pd.DataFrame()
+    for zip_file in downloaded_files:
+        df = extract_and_filter_bhavcopy(zip_file)
+        combined_df = pd.concat([combined_df, df], ignore_index=True)
+
+    if combined_df.empty:
+        print("No data extracted from bhavcopies. Exiting.")
+        exit()
+
+    print(f"Total new rows to append: {len(combined_df)}")
+    append_data_to_excel(EXCEL_DB_PATH, combined_df)
+
+    print("All done!")
