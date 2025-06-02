@@ -8,6 +8,7 @@ transformers
 requests
 xlsxwriter
 openpyxl
-jugaad-data==0.3.0
+jugaad-data==0.27
+
 
 
