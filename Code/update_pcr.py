@@ -359,13 +359,12 @@ import pandas as pd
 import zipfile
 import io
 from datetime import datetime, timedelta
-import time
 import os
 
 # Path to historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# Columns of interest for F&O data
+# List of interested symbols (Nifty 50)
 INTERESTED_SYMBOLS = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
     "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
@@ -388,12 +387,21 @@ def download_latest_bhavcopy():
         "Referer": "https://www.nseindia.com"
     }
 
+    session = requests.Session()
+    session.headers.update(headers)
+
+    # Prime the session to avoid 403
+    try:
+        session.get("https://www.nseindia.com", timeout=10)
+    except Exception as e:
+        print(f"⚠️ Session priming failed: {e}")
+
     for _ in range(max_attempts):
         url_date = date.strftime("%Y%m%d")
         url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
+        print(f"\n📥 Downloading: {url}")
         try:
-            print(f"\n📥 Downloading: {url}")
-            response = requests.get(url, headers=headers, timeout=10)
+            response = session.get(url, timeout=10)
             if response.status_code == 200:
                 zf = zipfile.ZipFile(io.BytesIO(response.content))
                 csv_name = zf.namelist()[0]
