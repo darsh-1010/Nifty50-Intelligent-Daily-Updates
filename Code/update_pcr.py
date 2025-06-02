@@ -354,80 +354,61 @@
 #         print("No live data fetched")
 
 #============================================================================================================================TRY3============================================================================================================
-import pandas as pd
 import requests
+import pandas as pd
 import zipfile
 import io
-import os
 from datetime import datetime, timedelta
+import time
+import os
 
-# Path to the historical Excel file
+# Path to historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# List of Nifty 50 symbols you care about
-nifty_50_symbols = [
+# Columns of interest for F&O data
+INTERESTED_SYMBOLS = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
     "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
     "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
+    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
     "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
     "IOC", "UPL", "EICHERMOT"
 ]
 
-# Try downloading the most recent available bhavcopy
 def download_latest_bhavcopy():
     date = datetime.now()
     max_attempts = 7
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.nseindia.com"
+    }
 
     for _ in range(max_attempts):
         url_date = date.strftime("%Y%m%d")
         url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
         try:
-            print(f"🔍 Trying: {url}")
-            response = requests.get(url, timeout=10)
+            print(f"\n📥 Downloading: {url}")
+            response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
-                print(f"✅ Found bhavcopy for {date.strftime('%Y-%m-%d')}")
                 zf = zipfile.ZipFile(io.BytesIO(response.content))
                 csv_name = zf.namelist()[0]
                 df = pd.read_csv(zf.open(csv_name))
+                print(f"✅ Successfully downloaded and extracted for {url_date}")
                 return df, date.strftime("%Y-%m-%d")
+            else:
+                print(f"⚠️ Status {response.status_code}: {url}")
         except Exception as e:
-            print(f"⚠️ Failed for {url_date}: {e}")
+            print(f"❌ Failed to download or extract UDiFF file: {e}")
+
         date -= timedelta(days=1)
 
-    raise Exception("❌ No bhavcopy found in the last 7 days")
+    raise Exception("❌ No valid bhavcopy found in the last 7 days")
 
-# Compute PCR and related features
-def compute_pcr_features(bhav_df, bhav_date):
-    filtered = bhav_df[bhav_df['INSTRUMENT'] == 'OPTSTK']
-    result = []
-
-    for symbol in nifty_50_symbols:
-        data = filtered[filtered['SYMBOL'] == symbol]
-        if data.empty:
-            continue
-
-        expiry = data['EXPIRY_DT'].iloc[0]
-        pe_oi = data[data['OPTION_TYP'] == 'PE']['OPEN_INT'].sum()
-        ce_oi = data[data['OPTION_TYP'] == 'CE']['OPEN_INT'].sum()
-        pe_vol = data[data['OPTION_TYP'] == 'PE']['TRDVAL'].sum()
-        ce_vol = data[data['OPTION_TYP'] == 'CE']['TRDVAL'].sum()
-
-        ce_oi = ce_oi if ce_oi != 0 else 1e-8
-        pcr = round(pe_oi / ce_oi, 2)
-
-        result.append({
-            "DATE": bhav_date,
-            "COMPANY": symbol,
-            "PUT_CONTRACTS": pe_vol,
-            "CALL_CONTRACTS": ce_vol,
-            "PCR_RATIO": pcr,
-            "EXPIRY_DATE": expiry
-        })
-
-    return pd.DataFrame(result)
-
-# PCR flag logic
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
         return "0"
@@ -437,29 +418,57 @@ def compute_pcr_flag(row):
         return "-1"
     return "0"
 
-# Label logic
 def compute_label(row):
     if row['PCR_RATIO'] > 1.2 and row['PCR_flag'] == "1":
         return "sell"
     elif row['PCR_RATIO'] < 0.8 and row['PCR_flag'] == "-1":
         return "buy"
-    return "hold"
+    else:
+        return "hold"
 
-# Update historical Excel with new data
-def update_excel(historical_path, live_df):
+def extract_and_compute_features(df, date_str):
+    df = df[df['INSTRUMENT'] == 'OPTSTK']
+    df = df[df['SYMBOL'].isin(INTERESTED_SYMBOLS)]
+
+    results = []
+    grouped = df.groupby(['SYMBOL', 'EXPIRY_DT'])
+
+    for (symbol, expiry), group in grouped:
+        pe_oi = group[group['OPTION_TYP'] == 'PE']['OPEN_INT'].sum()
+        ce_oi = group[group['OPTION_TYP'] == 'CE']['OPEN_INT'].sum()
+        pe_vol = group[group['OPTION_TYP'] == 'PE']['VOL'].sum()
+        ce_vol = group[group['OPTION_TYP'] == 'CE']['VOL'].sum()
+
+        if ce_oi == 0:
+            ce_oi = 1e-8
+
+        pcr = round(pe_oi / ce_oi, 2)
+
+        results.append({
+            "DATE": date_str,
+            "COMPANY": symbol,
+            "PUT_CONTRACTS": pe_vol,
+            "CALL_CONTRACTS": ce_vol,
+            "PCR_RATIO": pcr,
+            "EXPIRY_DATE": pd.to_datetime(expiry).strftime("%Y-%m-%d")
+        })
+
+    return pd.DataFrame(results)
+
+def update_existing_excel(historical_path, live_df):
     today = pd.to_datetime(datetime.now().date())
     historical_data = pd.read_excel(historical_path, sheet_name=None)
 
     for company in live_df["COMPANY"].unique():
         if company not in historical_data:
-            print(f"⚠️ Skipping {company} (not in historical workbook)")
+            print(f"📄 Skipping {company}, not in historical file")
             continue
 
         hist_df = historical_data[company]
         hist_df["DATE"] = pd.to_datetime(hist_df["DATE"])
 
         if today in hist_df["DATE"].values:
-            print(f"⏩ {company} already updated for today")
+            print(f"⏭️ {company} already updated for today, skipping")
             continue
 
         new_row = live_df[live_df["COMPANY"] == company].copy()
@@ -487,16 +496,13 @@ def update_excel(historical_path, live_df):
         for sheet_name, df in historical_data.items():
             df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
-    print(f"✅ Excel updated: {historical_path}")
+    print(f"\n✅ Historical Excel updated at {historical_path}")
 
-# Run the full pipeline
 if __name__ == "__main__":
-    try:
-        bhav_df, bhav_date = download_latest_bhavcopy()
-        live_df = compute_pcr_features(bhav_df, bhav_date)
-        if not live_df.empty:
-            update_excel(historical_file, live_df)
-        else:
-            print("⚠️ No data to update")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    bhavcopy_df, date_str = download_latest_bhavcopy()
+    live_df = extract_and_compute_features(bhavcopy_df, date_str)
+
+    if not live_df.empty:
+        update_existing_excel(historical_file, live_df)
+    else:
+        print("❌ No relevant data extracted from bhavcopy")
