@@ -375,7 +375,7 @@ INTERESTED_SYMBOLS = [
     "IOC", "UPL", "EICHERMOT"
 ]
 
-def download_latest_bhavcopy():
+def download_latest_udiff_bhavcopy():
     date = datetime.now()
     max_attempts = 7
 
@@ -397,24 +397,24 @@ def download_latest_bhavcopy():
             print(f"⚠️ Failed to prime session: {e}")
 
         for _ in range(max_attempts):
-            url_date = date.strftime("%Y%m%d")
-            url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
-            print(f"\n📥 Downloading: {url}")
+            url_date = date.strftime("%d%m%Y")
+            bhavcopy_url = f"https://archives.nseindia.com/content/historical/DERIVATIVES/{date.strftime('%Y')}/{date.strftime('%b').upper()}/fo{url_date}uddFIIbhav.csv.zip"
+            print(f"\n📥 Trying to download: {bhavcopy_url}")
             try:
-                response = client.get(url)
+                response = client.get(bhavcopy_url)
                 if response.status_code == 200:
                     zf = zipfile.ZipFile(io.BytesIO(response.content))
                     csv_name = zf.namelist()[0]
                     df = pd.read_csv(zf.open(csv_name))
-                    print(f"✅ Successfully downloaded and extracted for {url_date}")
+                    print(f"✅ Successfully downloaded and extracted for {date.strftime('%Y-%m-%d')}")
                     return df, date.strftime("%Y-%m-%d")
                 else:
-                    print(f"⚠️ Status {response.status_code}: {url}")
+                    print(f"⚠️ HTTP {response.status_code} for {url_date}")
             except Exception as e:
-                print(f"❌ Failed to download or extract UDiFF file: {e}")
+                print(f"❌ Error downloading or extracting: {e}")
             date -= timedelta(days=1)
 
-    raise Exception("❌ No valid bhavcopy found in the last 7 days")
+    raise Exception("❌ No valid UDiFF bhavcopy found in the last 7 days")
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -447,7 +447,7 @@ def extract_and_compute_features(df, date_str):
         ce_vol = group[group['OPTION_TYP'] == 'CE']['VOL'].sum()
 
         if ce_oi == 0:
-            ce_oi = 1e-8
+            ce_oi = 1e-8  # Avoid division by zero
 
         pcr = round(pe_oi / ce_oi, 2)
 
@@ -506,7 +506,7 @@ def update_existing_excel(historical_path, live_df):
     print(f"\n✅ Historical Excel updated at {historical_path}")
 
 if __name__ == "__main__":
-    bhavcopy_df, date_str = download_latest_bhavcopy()
+    bhavcopy_df, date_str = download_latest_udiff_bhavcopy()
     live_df = extract_and_compute_features(bhavcopy_df, date_str)
 
     if not live_df.empty:
