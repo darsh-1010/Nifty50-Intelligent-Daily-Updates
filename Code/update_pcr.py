@@ -358,14 +358,13 @@ import httpx
 import pandas as pd
 import zipfile
 import io
-from datetime import datetime, timedelta
 import time
-import os
+from datetime import datetime, timedelta
 
-# Path to historical Excel file
+# 📁 Path to the historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# Nifty 50 Symbols
+# 📌 List of Nifty 50 Symbols
 INTERESTED_SYMBOLS = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
     "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
@@ -375,9 +374,10 @@ INTERESTED_SYMBOLS = [
     "IOC", "UPL", "EICHERMOT"
 ]
 
-def download_latest_udiff_bhavcopy():
+# 🔽 Download latest UDiFF Bhavcopy
+def download_latest_bhavcopy():
     date = datetime.now()
-    max_attempts = 7
+    max_days = 7
 
     headers = {
         "User-Agent": (
@@ -389,33 +389,37 @@ def download_latest_udiff_bhavcopy():
     }
 
     with httpx.Client(headers=headers, timeout=10, follow_redirects=True) as client:
+        print("🌐 Priming session with NSE homepage...")
         try:
-            print("🌐 Priming session with NSE homepage...")
             client.get("https://www.nseindia.com")
             time.sleep(1)
         except Exception as e:
             print(f"⚠️ Failed to prime session: {e}")
 
-        for _ in range(max_attempts):
-            url_date = date.strftime("%d%m%Y")
-            bhavcopy_url = f"https://archives.nseindia.com/content/historical/DERIVATIVES/{date.strftime('%Y')}/{date.strftime('%b').upper()}/fo{url_date}uddFIIbhav.csv.zip"
-            print(f"\n📥 Trying to download: {bhavcopy_url}")
+        for _ in range(max_days):
+            url_date = date.strftime("%Y%m%d")
+            file_name = f"BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
+            url = f"https://nsearchives.nseindia.com/content/fo/{file_name}"
+
+            print(f"📥 Trying to download: {url}")
             try:
-                response = client.get(bhavcopy_url)
+                response = client.get(url)
                 if response.status_code == 200:
                     zf = zipfile.ZipFile(io.BytesIO(response.content))
                     csv_name = zf.namelist()[0]
                     df = pd.read_csv(zf.open(csv_name))
-                    print(f"✅ Successfully downloaded and extracted for {date.strftime('%Y-%m-%d')}")
+                    print(f"✅ Downloaded and extracted bhavcopy for {url_date}")
                     return df, date.strftime("%Y-%m-%d")
                 else:
                     print(f"⚠️ HTTP {response.status_code} for {url_date}")
             except Exception as e:
-                print(f"❌ Error downloading or extracting: {e}")
+                print(f"❌ Error downloading or parsing bhavcopy: {e}")
+
             date -= timedelta(days=1)
 
     raise Exception("❌ No valid UDiFF bhavcopy found in the last 7 days")
 
+# 🧮 Compute PCR flag
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
         return "0"
@@ -425,14 +429,15 @@ def compute_pcr_flag(row):
         return "-1"
     return "0"
 
+# 🏷️ Compute final label
 def compute_label(row):
     if row['PCR_RATIO'] > 1.2 and row['PCR_flag'] == "1":
         return "sell"
     elif row['PCR_RATIO'] < 0.8 and row['PCR_flag'] == "-1":
         return "buy"
-    else:
-        return "hold"
+    return "hold"
 
+# 🔍 Extract PCR from raw bhavcopy DataFrame
 def extract_and_compute_features(df, date_str):
     df = df[df['INSTRUMENT'] == 'OPTSTK']
     df = df[df['SYMBOL'].isin(INTERESTED_SYMBOLS)]
@@ -447,7 +452,7 @@ def extract_and_compute_features(df, date_str):
         ce_vol = group[group['OPTION_TYP'] == 'CE']['VOL'].sum()
 
         if ce_oi == 0:
-            ce_oi = 1e-8  # Avoid division by zero
+            ce_oi = 1e-8
 
         pcr = round(pe_oi / ce_oi, 2)
 
@@ -462,6 +467,7 @@ def extract_and_compute_features(df, date_str):
 
     return pd.DataFrame(results)
 
+# 📈 Update historical Excel
 def update_existing_excel(historical_path, live_df):
     today = pd.to_datetime(datetime.now().date())
     historical_data = pd.read_excel(historical_path, sheet_name=None)
@@ -505,8 +511,9 @@ def update_existing_excel(historical_path, live_df):
 
     print(f"\n✅ Historical Excel updated at {historical_path}")
 
+# 🚀 Entry Point
 if __name__ == "__main__":
-    bhavcopy_df, date_str = download_latest_udiff_bhavcopy()
+    bhavcopy_df, date_str = download_latest_bhavcopy()
     live_df = extract_and_compute_features(bhavcopy_df, date_str)
 
     if not live_df.empty:
