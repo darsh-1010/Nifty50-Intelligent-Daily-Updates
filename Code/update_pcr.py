@@ -364,58 +364,62 @@ import os
 # Path to historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# List of interested symbols (Nifty 50)
+# Symbols to track
 INTERESTED_SYMBOLS = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
     "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
     "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
+    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
     "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
     "IOC", "UPL", "EICHERMOT"
 ]
 
 def download_latest_bhavcopy():
+    from urllib.parse import urljoin
+
     date = datetime.now()
     max_attempts = 7
-
+    base_url = "https://nsearchives.nseindia.com/content/fo/"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/125.0.0.0 Safari/537.36"
         ),
-        "Referer": "https://www.nseindia.com"
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com",
     }
 
     session = requests.Session()
     session.headers.update(headers)
-
-    # Prime the session to avoid 403
     try:
         session.get("https://www.nseindia.com", timeout=10)
     except Exception as e:
-        print(f"⚠️ Session priming failed: {e}")
+        print(f"⚠️ Priming failed: {e}")
 
     for _ in range(max_attempts):
         url_date = date.strftime("%Y%m%d")
-        url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
+        filename = f"BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
+        url = urljoin(base_url, filename)
+
         print(f"\n📥 Downloading: {url}")
         try:
-            response = session.get(url, timeout=10)
+            response = session.get(url, timeout=15)
             if response.status_code == 200:
                 zf = zipfile.ZipFile(io.BytesIO(response.content))
                 csv_name = zf.namelist()[0]
                 df = pd.read_csv(zf.open(csv_name))
-                print(f"✅ Successfully downloaded and extracted for {url_date}")
+                print(f"✅ Successfully downloaded for {url_date}")
                 return df, date.strftime("%Y-%m-%d")
             else:
-                print(f"⚠️ Status {response.status_code}: {url}")
+                print(f"❌ {response.status_code} from NSE for {url}")
         except Exception as e:
-            print(f"❌ Failed to download or extract UDiFF file: {e}")
+            print(f"❌ Failed to retrieve ZIP for {url_date}: {e}")
 
         date -= timedelta(days=1)
 
-    raise Exception("❌ No valid bhavcopy found in the last 7 days")
+    raise Exception("❌ Could not find a valid bhavcopy for last 7 days.")
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
