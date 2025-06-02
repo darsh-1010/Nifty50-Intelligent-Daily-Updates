@@ -354,22 +354,23 @@
 #         print("No live data fetched")
 
 #============================================================================================================================TRY3============================================================================================================
-import requests
+import httpx
 import pandas as pd
 import zipfile
 import io
 from datetime import datetime, timedelta
+import time
 import os
 
 # Path to historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# Nifty 50 Symbols of Interest
+# Nifty 50 Symbols
 INTERESTED_SYMBOLS = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
     "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
     "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
+    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
     "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
     "IOC", "UPL", "EICHERMOT"
 ]
@@ -387,34 +388,31 @@ def download_latest_bhavcopy():
         "Referer": "https://www.nseindia.com"
     }
 
-    session = requests.Session()
-    session.headers.update(headers)
-
-    # Prime session with NSE homepage to avoid 403
-    try:
-        session.get("https://www.nseindia.com", timeout=10)
-    except Exception as e:
-        print(f"⚠️ Session priming failed: {e}")
-
-    for _ in range(max_attempts):
-        url_date = date.strftime("%Y%m%d")
-        url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
-
-        print(f"\n📥 Downloading: {url}")
+    with httpx.Client(headers=headers, timeout=10, follow_redirects=True) as client:
         try:
-            response = session.get(url, timeout=10)
-            if response.status_code == 200:
-                zf = zipfile.ZipFile(io.BytesIO(response.content))
-                csv_name = zf.namelist()[0]
-                df = pd.read_csv(zf.open(csv_name))
-                print(f"✅ Successfully downloaded and extracted for {url_date}")
-                return df, date.strftime("%Y-%m-%d")
-            else:
-                print(f"⚠️ Status {response.status_code}: {url}")
+            print("🌐 Priming session with NSE homepage...")
+            client.get("https://www.nseindia.com")
+            time.sleep(1)
         except Exception as e:
-            print(f"❌ Failed to download or extract UDiFF file: {e}")
+            print(f"⚠️ Failed to prime session: {e}")
 
-        date -= timedelta(days=1)
+        for _ in range(max_attempts):
+            url_date = date.strftime("%Y%m%d")
+            url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{url_date}_F_0000.csv.zip"
+            print(f"\n📥 Downloading: {url}")
+            try:
+                response = client.get(url)
+                if response.status_code == 200:
+                    zf = zipfile.ZipFile(io.BytesIO(response.content))
+                    csv_name = zf.namelist()[0]
+                    df = pd.read_csv(zf.open(csv_name))
+                    print(f"✅ Successfully downloaded and extracted for {url_date}")
+                    return df, date.strftime("%Y-%m-%d")
+                else:
+                    print(f"⚠️ Status {response.status_code}: {url}")
+            except Exception as e:
+                print(f"❌ Failed to download or extract UDiFF file: {e}")
+            date -= timedelta(days=1)
 
     raise Exception("❌ No valid bhavcopy found in the last 7 days")
 
