@@ -9,4 +9,4 @@ requests
 xlsxwriter
 openpyxl
 jugaad-data
-cfscrape
+httpx
