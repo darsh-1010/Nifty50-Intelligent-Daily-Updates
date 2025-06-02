@@ -1,3 +1,64 @@
+# name: Daily Nifty50 AI Update
+
+# on:
+#   schedule:
+#     - cron: '30 2 * * *'  # Every day at 8:00 AM IST
+#   workflow_dispatch:
+
+# jobs:
+#   update-data:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v3
+
+#       - name: Set up Python
+#         uses: actions/setup-python@v4
+#         with:
+#           python-version: '3.10'
+
+#       - name: Install dependencies
+#         run: |
+#           python -m pip install --upgrade pip
+#           pip install -r requirements.txt || { echo "❌ Failed to install dependencies"; exit 1; }
+
+#       - name: Confirm installed packages
+#         run: pip freeze
+
+#       - name: Debug workspace structure
+#         run: |
+#           echo "Current directory:"
+#           pwd
+#           echo "Files and folders:"
+#           ls -R
+
+#       - name: Run update scripts
+#         run: |
+#           python Code/updateohlcv.py
+#           python Code/UPDATE_NEWS.py
+#           python Code/update_pcr.py
+
+#         env:
+#           NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+#           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+#           GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
+        
+
+#       - name: Commit and push updated databases
+#         run: |
+#           git config --global user.name "github-actions[bot]"
+#           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+#           git add Databases/*.xlsx
+#           git commit -m "Update databases [bot]" || echo "No changes to commit"
+#           git push
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+
+
+
 name: Daily Nifty50 AI Update
 
 on:
@@ -33,17 +94,28 @@ jobs:
           echo "Files and folders:"
           ls -R
 
+      - name: Download NSE UDiFF ZIP manually using curl
+        run: |
+          mkdir -p Databases
+          DATE=$(date +'%Y%m%d')
+          FILE_URL="https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_${DATE}_F_0000.csv.zip"
+          echo "📥 Downloading $FILE_URL"
+          curl -L -o Databases/UDiFF.zip "$FILE_URL" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+            -H "Referer: https://www.nseindia.com" \
+            -H "Connection: keep-alive" \
+            --retry 3 --retry-delay 5 --fail
+
       - name: Run update scripts
         run: |
           python Code/updateohlcv.py
           python Code/UPDATE_NEWS.py
           python Code/update_pcr.py
-
         env:
           NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
-        
 
       - name: Commit and push updated databases
         run: |
@@ -54,3 +126,4 @@ jobs:
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
