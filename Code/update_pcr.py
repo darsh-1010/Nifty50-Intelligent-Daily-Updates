@@ -531,6 +531,7 @@ from datetime import datetime
 from yahoo_fin import options as ops
 from yahoo_fin import stock_info as si
 import warnings
+import requests_html
 
 # Suppress warnings from yahoo_fin
 warnings.simplefilter(action='ignore', category=FutureWarning)
