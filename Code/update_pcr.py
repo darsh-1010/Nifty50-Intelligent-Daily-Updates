@@ -533,81 +533,46 @@
 
 
 
-
-
-
+import requests
 import pandas as pd
 from datetime import datetime
-import time
-import openpyxl
+import os
 
-# You need to install jugaad_data if not already
-# pip install jugaad-data
+# DhanHQ credentials
+DHAN_ACCESS_TOKEN = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbkNvbnN1bWVyVHlwZSI6IlNFTEYiLCJwYXJ0bmVySWQiOiIiLCJkaGFuQ2xpZW50SWQiOiIyNTA2MDM3Njg5Iiwid2ViaG9va1VybCI6IiIsImlzcyI6ImRoYW4iLCJleHAiOjE3NTE1MjM5ODh9.--VmYRlUmLvD4r4ioCy1hTOpSc2LxV7abks1-nDmUGU8bIm3eCn2WPkKx_m_lB4mFQZCHh5IiZZgCLIw78zm3w"
+DHAN_CLIENT_ID = "2506037689"
 
-from jugaad_data.nse import option_chain
-
+DHAN_BASE_URL = "https://api.dhan.co"
+HEADERS = {
+    "Authorization": f"Bearer {DHAN_ACCESS_TOKEN}",
+    "accept": "application/json"
+}
 
 # Path to historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# Nifty 50 Symbols of interest
+# Symbols to track
 INTERESTED_SYMBOLS = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
     "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
     "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN", 
+    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
     "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
     "IOC", "UPL", "EICHERMOT"
 ]
 
-def fetch_option_chain_data():
-    """
-    Fetch option chain data for all INTERESTED_SYMBOLS using jugaad_data
-    and return a combined DataFrame with necessary columns similar to NSE bhavcopy.
-    """
-    all_data = []
-
-    print("Fetching option chain data via jugaad_data...")
-    for symbol in INTERESTED_SYMBOLS:
-        try:
-            oc_df = option_chain(symbol)
-            # Filter for Option Stock only (OPTSTK)
-            # jugaad_data returns columns like 'strikePrice', 'expiryDate', 'optionType', 'openInterest', 'totalTradedVolume'
-            # We need to align column names with your downstream processing
-            
-            if oc_df.empty:
-                print(f"⚠️ No option chain data for {symbol}")
-                continue
-
-            # Only keep relevant columns and rename to match your existing code's expectations
-            oc_df = oc_df.rename(columns={
-                'optionType': 'OPTION_TYP',
-                'openInterest': 'OPEN_INT',
-                'totalTradedVolume': 'VOL',
-                'expiryDate': 'EXPIRY_DT',
-                'underlying': 'SYMBOL',
-            })
-
-            # Add a fixed column for INSTRUMENT to match filter
-            oc_df['INSTRUMENT'] = 'OPTSTK'
-
-            # Add symbol column if missing or correct it
-            oc_df['SYMBOL'] = symbol
-
-            # Keep only necessary columns for further processing
-            oc_df = oc_df[['SYMBOL', 'INSTRUMENT', 'EXPIRY_DT', 'OPTION_TYP', 'OPEN_INT', 'VOL']]
-
-            all_data.append(oc_df)
-            # To avoid getting blocked, sleep a bit between calls
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error fetching option chain for {symbol}: {e}")
-
-    if all_data:
-        combined_df = pd.concat(all_data, ignore_index=True)
-        return combined_df
-    else:
-        raise Exception("No option chain data fetched.")
+def fetch_dhan_option_chain(symbol):
+    url = f"{DHAN_BASE_URL}/option-chain/{symbol}"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"❌ Failed for {symbol}: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"❌ Exception for {symbol}: {e}")
+        return None
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -626,21 +591,28 @@ def compute_label(row):
     else:
         return "hold"
 
-def extract_and_compute_features(df, date_str):
-    df = df[df['INSTRUMENT'] == 'OPTSTK']
-    df = df[df['SYMBOL'].isin(INTERESTED_SYMBOLS)]
-
+def extract_and_compute_features(date_str):
     results = []
-    grouped = df.groupby(['SYMBOL', 'EXPIRY_DT'])
+    for symbol in INTERESTED_SYMBOLS:
+        data = fetch_dhan_option_chain(symbol)
+        if not data:
+            continue
 
-    for (symbol, expiry), group in grouped:
-        pe_oi = group[group['OPTION_TYP'] == 'PE']['OPEN_INT'].sum()
-        ce_oi = group[group['OPTION_TYP'] == 'CE']['OPEN_INT'].sum()
-        pe_vol = group[group['OPTION_TYP'] == 'PE']['VOL'].sum()
-        ce_vol = group[group['OPTION_TYP'] == 'CE']['VOL'].sum()
+        ce_oi = 0
+        pe_oi = 0
+        ce_vol = 0
+        pe_vol = 0
+
+        for item in data.get('data', []):
+            if item['optionType'] == 'CE':
+                ce_oi += int(item['openInterest'])
+                ce_vol += int(item['volume'])
+            elif item['optionType'] == 'PE':
+                pe_oi += int(item['openInterest'])
+                pe_vol += int(item['volume'])
 
         if ce_oi == 0:
-            ce_oi = 1e-8  # Avoid division by zero
+            ce_oi = 1e-8  # Avoid divide by zero
 
         pcr = round(pe_oi / ce_oi, 2)
 
@@ -650,7 +622,7 @@ def extract_and_compute_features(df, date_str):
             "PUT_CONTRACTS": pe_vol,
             "CALL_CONTRACTS": ce_vol,
             "PCR_RATIO": pcr,
-            "EXPIRY_DATE": pd.to_datetime(expiry).strftime("%Y-%m-%d")
+            "EXPIRY_DATE": "N/A"
         })
 
     return pd.DataFrame(results)
@@ -700,15 +672,9 @@ def update_existing_excel(historical_path, live_df):
 
 if __name__ == "__main__":
     today_str = datetime.now().strftime("%Y-%m-%d")
+    live_df = extract_and_compute_features(today_str)
 
-    try:
-        oc_df = fetch_option_chain_data()
-        live_df = extract_and_compute_features(oc_df, today_str)
-
-        if not live_df.empty:
-            update_existing_excel(historical_file, live_df)
-        else:
-            print("❌ No relevant option chain data extracted.")
-    except Exception as e:
-        print(f"❌ Failed to fetch or update data: {e}")
-
+    if not live_df.empty:
+        update_existing_excel(historical_file, live_df)
+    else:
+        print("❌ No data extracted from DhanHQ API")
