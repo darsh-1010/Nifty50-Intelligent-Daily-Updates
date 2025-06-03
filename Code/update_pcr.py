@@ -568,7 +568,7 @@ def compute_label(row):
 
 def fetch_yahoo_option_data(symbol):
     try:
-        expiries = si.get_expiration_dates(symbol)
+        expiries = ops.get_expiration_dates(symbol)
         if not expiries:
             print(f"❌ No expiries for {symbol}")
             return None
