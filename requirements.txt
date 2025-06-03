@@ -10,6 +10,7 @@ xlsxwriter
 openpyxl
 jugaad-data==0.27
 yahoo_fin
+requests-html
 
 
 
