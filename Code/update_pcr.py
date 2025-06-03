@@ -529,13 +529,13 @@
 
 import pandas as pd
 from datetime import datetime
+from yahoo_fin import options as ops
 import os
-from yahoo_fin import stock_info as si
 
-# Historical Excel path
+# Path to the historical Excel file
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# Yahoo-compatible tickers (append ".NS" for NSE)
+# List of Yahoo-compatible NSE stock symbols
 INTERESTED_SYMBOLS = [
     "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "KOTAKBANK.NS",
     "BHARTIARTL.NS", "ITC.NS", "LT.NS", "ASIANPAINT.NS", "HINDUNILVR.NS", "MARUTI.NS",
@@ -545,6 +545,8 @@ INTERESTED_SYMBOLS = [
     "ADANIENT.NS", "ADANIGREEN.NS", "VEDL.NS", "SHREECEM.NS", "BAJAJ-AUTO.NS", "HEROMOTOCO.NS",
     "WIPRO.NS", "TECHM.NS", "COALINDIA.NS", "BPCL.NS", "GAIL.NS", "IOC.NS", "UPL.NS", "EICHERMOT.NS"
 ]
+
+# ---------------------- Helper Functions ----------------------
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -563,14 +565,16 @@ def compute_label(row):
     else:
         return "hold"
 
+# ---------------------- Data Extraction ----------------------
+
 def fetch_yahoo_option_data(symbol):
     try:
-        expiries = si.get_expiration_dates(symbol)
+        expiries = ops.get_expiration_dates(symbol)
         if not expiries:
             print(f"❌ No expiries for {symbol}")
             return None
 
-        data = si.get_options_chain(symbol, expiries[0])  # Nearest expiry
+        data = ops.get_options_chain(symbol, expiries[0])  # Nearest expiry
         calls_df = data.get("calls", pd.DataFrame())
         puts_df = data.get("puts", pd.DataFrame())
 
@@ -590,8 +594,8 @@ def extract_and_compute_features(date_str):
         result = fetch_yahoo_option_data(symbol)
         if not result:
             continue
-        ce_vol, pe_vol, expiry = result
 
+        ce_vol, pe_vol, expiry = result
         ce_vol = ce_vol or 1e-8  # Prevent division by zero
         pcr = round(pe_vol / ce_vol, 2)
 
@@ -605,6 +609,8 @@ def extract_and_compute_features(date_str):
         })
 
     return pd.DataFrame(results)
+
+# ---------------------- Excel Update Logic ----------------------
 
 def update_existing_excel(historical_path, live_df):
     today = pd.to_datetime(datetime.now().date())
@@ -627,6 +633,7 @@ def update_existing_excel(historical_path, live_df):
 
         updated_df = pd.concat([hist_df, new_row], ignore_index=True).sort_values("DATE")
 
+        # Feature Engineering
         updated_df["PCR_5DAY_AVG"] = updated_df["PCR_RATIO"].rolling(window=5).mean()
         updated_df["PCR_VS_5DAY_AVG"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).round(4)
         updated_df["PCR_deviation"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).abs().round(4)
@@ -638,16 +645,20 @@ def update_existing_excel(historical_path, live_df):
             lambda z: "Spike" if z > 2 else "Dip" if z < -2 else "Normal"
         )
 
-        updated_df['PCR_flag'] = updated_df.apply(compute_pcr_flag, axis=1)
-        updated_df['label'] = updated_df.apply(compute_label, axis=1)
+        # Labeling
+        updated_df["PCR_flag"] = updated_df.apply(compute_pcr_flag, axis=1)
+        updated_df["label"] = updated_df.apply(compute_label, axis=1)
 
         historical_data[company] = updated_df
 
+    # Save back to Excel
     with pd.ExcelWriter(historical_path, engine="openpyxl", mode='w') as writer:
         for sheet_name, df in historical_data.items():
             df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
     print(f"\n✅ Historical Excel updated at {historical_path}")
+
+# ---------------------- Main Execution ----------------------
 
 if __name__ == "__main__":
     today_str = datetime.now().strftime("%Y-%m-%d")
