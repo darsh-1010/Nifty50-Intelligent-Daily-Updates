@@ -527,52 +527,24 @@
 
 
 
-
-
-
-
-
-
-import requests
 import pandas as pd
 from datetime import datetime
 import os
+from yahoo_fin import stock_info as si
 
-# DhanHQ credentials
-DHAN_ACCESS_TOKEN = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbkNvbnN1bWVyVHlwZSI6IlNFTEYiLCJwYXJ0bmVySWQiOiIiLCJkaGFuQ2xpZW50SWQiOiIyNTA2MDM3Njg5Iiwid2ViaG9va1VybCI6IiIsImlzcyI6ImRoYW4iLCJleHAiOjE3NTE1MjM5ODh9.--VmYRlUmLvD4r4ioCy1hTOpSc2LxV7abks1-nDmUGU8bIm3eCn2WPkKx_m_lB4mFQZCHh5IiZZgCLIw78zm3w"
-DHAN_CLIENT_ID = "2506037689"
-
-DHAN_BASE_URL = "https://api.dhan.co"
-HEADERS = {
-    "Authorization": f"Bearer {DHAN_ACCESS_TOKEN}",
-    "accept": "application/json"
-}
-
-# Path to historical Excel file
+# Historical Excel path
 historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
 
-# Symbols to track
+# Yahoo-compatible tickers (append ".NS" for NSE)
 INTERESTED_SYMBOLS = [
-    "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "BHARTIARTL", "ITC", "LT",
-    "ASIANPAINT", "HINDUNILVR", "MARUTI", "AXISBANK", "BAJFINANCE", "BAJAJFINSV", "SBIN", "NTPC",
-    "POWERGRID", "ULTRACEMCO", "NESTLEIND", "BRITANNIA", "M&M", "SUNPHARMA", "DIVISLAB", "INDUSINDBK",
-    "TATAMOTORS", "TITAN", "DRREDDY", "GRASIM", "ADANIPORTS", "ADANIENT", "ADANIGREEN",
-    "VEDL", "SHREECEM", "BAJAJ-AUTO", "HEROMOTOCO", "WIPRO", "TECHM", "COALINDIA", "BPCL", "GAIL",
-    "IOC", "UPL", "EICHERMOT"
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "KOTAKBANK.NS",
+    "BHARTIARTL.NS", "ITC.NS", "LT.NS", "ASIANPAINT.NS", "HINDUNILVR.NS", "MARUTI.NS",
+    "AXISBANK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBIN.NS", "NTPC.NS", "POWERGRID.NS",
+    "ULTRACEMCO.NS", "NESTLEIND.NS", "BRITANNIA.NS", "M&M.NS", "SUNPHARMA.NS", "DIVISLAB.NS",
+    "INDUSINDBK.NS", "TATAMOTORS.NS", "TITAN.NS", "DRREDDY.NS", "GRASIM.NS", "ADANIPORTS.NS",
+    "ADANIENT.NS", "ADANIGREEN.NS", "VEDL.NS", "SHREECEM.NS", "BAJAJ-AUTO.NS", "HEROMOTOCO.NS",
+    "WIPRO.NS", "TECHM.NS", "COALINDIA.NS", "BPCL.NS", "GAIL.NS", "IOC.NS", "UPL.NS", "EICHERMOT.NS"
 ]
-
-def fetch_dhan_option_chain(symbol):
-    url = f"{DHAN_BASE_URL}/option-chain/{symbol}"
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"❌ Failed for {symbol}: {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"❌ Exception for {symbol}: {e}")
-        return None
 
 def compute_pcr_flag(row):
     if pd.isna(row['PCR_5DAY_AVG']):
@@ -591,38 +563,45 @@ def compute_label(row):
     else:
         return "hold"
 
+def fetch_yahoo_option_data(symbol):
+    try:
+        expiries = si.get_expiration_dates(symbol)
+        if not expiries:
+            print(f"❌ No expiries for {symbol}")
+            return None
+
+        data = si.get_options_chain(symbol, expiries[0])  # Nearest expiry
+        calls_df = data.get("calls", pd.DataFrame())
+        puts_df = data.get("puts", pd.DataFrame())
+
+        total_call_volume = calls_df["Volume"].fillna(0).sum()
+        total_put_volume = puts_df["Volume"].fillna(0).sum()
+
+        return total_call_volume, total_put_volume, expiries[0]
+    except Exception as e:
+        print(f"❌ Error fetching {symbol}: {e}")
+        return None
+
 def extract_and_compute_features(date_str):
     results = []
+
     for symbol in INTERESTED_SYMBOLS:
-        data = fetch_dhan_option_chain(symbol)
-        if not data:
+        print(f"🔄 Fetching {symbol}...")
+        result = fetch_yahoo_option_data(symbol)
+        if not result:
             continue
+        ce_vol, pe_vol, expiry = result
 
-        ce_oi = 0
-        pe_oi = 0
-        ce_vol = 0
-        pe_vol = 0
-
-        for item in data.get('data', []):
-            if item['optionType'] == 'CE':
-                ce_oi += int(item['openInterest'])
-                ce_vol += int(item['volume'])
-            elif item['optionType'] == 'PE':
-                pe_oi += int(item['openInterest'])
-                pe_vol += int(item['volume'])
-
-        if ce_oi == 0:
-            ce_oi = 1e-8  # Avoid divide by zero
-
-        pcr = round(pe_oi / ce_oi, 2)
+        ce_vol = ce_vol or 1e-8  # Prevent division by zero
+        pcr = round(pe_vol / ce_vol, 2)
 
         results.append({
             "DATE": date_str,
-            "COMPANY": symbol,
+            "COMPANY": symbol.replace(".NS", ""),
             "PUT_CONTRACTS": pe_vol,
             "CALL_CONTRACTS": ce_vol,
             "PCR_RATIO": pcr,
-            "EXPIRY_DATE": "N/A"
+            "EXPIRY_DATE": expiry
         })
 
     return pd.DataFrame(results)
@@ -677,4 +656,4 @@ if __name__ == "__main__":
     if not live_df.empty:
         update_existing_excel(historical_file, live_df)
     else:
-        print("❌ No data extracted from DhanHQ API")
+        print("❌ No data extracted from Yahoo Finance")
