@@ -570,36 +570,39 @@ def compute_label(row):
 def fetch_yahoo_option_data(symbol):
     try:
         expiries = ops.get_expiration_dates(symbol)
+        expiries = [e.strip() for e in expiries if e and e.strip()]
+
         if not expiries:
-            print(f"❌ No expiries for {symbol}")
+            print(f"⚠️ No valid expiry dates for {symbol}")
             return None
 
-        expiry_raw = expiries[0]  # Nearest expiry
-        try:
-            expiry_date = datetime.strptime(expiry_raw, "%B %d, %Y").date()  # E.g. "June 6, 2025"
-        except ValueError:
-            print(f"⚠️ Unable to parse expiry for {symbol}: '{expiry_raw}'")
-            return None
+        expiry = expiries[0]
+        data = ops.get_options_chain(symbol, expiry)
 
-        data = ops.get_options_chain(symbol, expiry_raw)
         calls_df = data.get("calls", pd.DataFrame())
         puts_df = data.get("puts", pd.DataFrame())
+
+        if calls_df.empty or puts_df.empty:
+            print(f"⚠️ Empty options data for {symbol}")
+            return None
 
         total_call_volume = calls_df["Volume"].fillna(0).sum()
         total_put_volume = puts_df["Volume"].fillna(0).sum()
 
-        return total_call_volume, total_put_volume, expiry_date.strftime("%Y-%m-%d")
+        return total_call_volume, total_put_volume, expiry
     except Exception as e:
         print(f"❌ Error fetching {symbol}: {e}")
         return None
 
 def extract_and_compute_features(date_str):
     results = []
+    failed_symbols = []
 
     for symbol in INTERESTED_SYMBOLS:
         print(f"🔄 Fetching {symbol}...")
         result = fetch_yahoo_option_data(symbol)
         if not result:
+            failed_symbols.append(symbol)
             continue
         ce_vol, pe_vol, expiry = result
 
@@ -614,6 +617,10 @@ def extract_and_compute_features(date_str):
             "PCR_RATIO": pcr,
             "EXPIRY_DATE": expiry
         })
+
+    if failed_symbols:
+        print("\n🚫 Symbols with no valid data:")
+        print(", ".join(failed_symbols))
 
     return pd.DataFrame(results)
 
@@ -668,4 +675,5 @@ if __name__ == "__main__":
         update_existing_excel(historical_file, live_df)
     else:
         print("❌ No data extracted from Yahoo Finance")
+
 
