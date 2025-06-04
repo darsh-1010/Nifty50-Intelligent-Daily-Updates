@@ -574,14 +574,21 @@ def fetch_yahoo_option_data(symbol):
             print(f"❌ No expiries for {symbol}")
             return None
 
-        data = ops.get_options_chain(symbol, expiries[0])  # Nearest expiry
+        expiry_raw = expiries[0]  # Nearest expiry
+        try:
+            expiry_date = datetime.strptime(expiry_raw, "%B %d, %Y").date()  # E.g. "June 6, 2025"
+        except ValueError:
+            print(f"⚠️ Unable to parse expiry for {symbol}: '{expiry_raw}'")
+            return None
+
+        data = ops.get_options_chain(symbol, expiry_raw)
         calls_df = data.get("calls", pd.DataFrame())
         puts_df = data.get("puts", pd.DataFrame())
 
         total_call_volume = calls_df["Volume"].fillna(0).sum()
         total_put_volume = puts_df["Volume"].fillna(0).sum()
 
-        return total_call_volume, total_put_volume, expiries[0]
+        return total_call_volume, total_put_volume, expiry_date.strftime("%Y-%m-%d")
     except Exception as e:
         print(f"❌ Error fetching {symbol}: {e}")
         return None
