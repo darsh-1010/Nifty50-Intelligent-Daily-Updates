@@ -526,154 +526,125 @@
 
 
 
+import os
+import time
+import pytz
+import numpy as np
 import pandas as pd
 from datetime import datetime
-from yahoo_fin import options as ops
-from yahoo_fin import stock_info as si
-import warnings
-import requests_html
+import yfinance as yf
+import requests
 
-# Suppress warnings from yahoo_fin
-warnings.simplefilter(action='ignore', category=FutureWarning)
+# Constants
+tz_IN = pytz.timezone('Asia/Kolkata')
+today_date = datetime.today().strftime('%Y-%m-%d')
+DB_PATH = 'Databases/Nifty_50_PCR_Hisotrical_Data.xlsx'
 
-# Historical Excel path
-historical_file = r"Databases/Nifty_50_PCR_Hisotrical_Data.xlsx"
-
-# Yahoo-compatible tickers
-INTERESTED_SYMBOLS = [
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "KOTAKBANK.NS",
-    "BHARTIARTL.NS", "ITC.NS", "LT.NS", "ASIANPAINT.NS", "HINDUNILVR.NS", "MARUTI.NS",
-    "AXISBANK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBIN.NS", "NTPC.NS", "POWERGRID.NS",
-    "ULTRACEMCO.NS", "NESTLEIND.NS", "BRITANNIA.NS", "M&M.NS", "SUNPHARMA.NS", "DIVISLAB.NS",
-    "INDUSINDBK.NS", "TATAMOTORS.NS", "TITAN.NS", "DRREDDY.NS", "GRASIM.NS", "ADANIPORTS.NS",
-    "ADANIENT.NS", "ADANIGREEN.NS", "VEDL.NS", "SHREECEM.NS", "BAJAJ-AUTO.NS", "HEROMOTOCO.NS",
-    "WIPRO.NS", "TECHM.NS", "COALINDIA.NS", "BPCL.NS", "GAIL.NS", "IOC.NS", "UPL.NS", "EICHERMOT.NS"
+# List of Nifty 50 symbols
+nifty50_symbols = [
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BPCL", "BHARTIARTL",
+    "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY",
+    "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
+    "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC",
+    "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK", "LT",
+    "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC",
+    "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SUNPHARMA",
+    "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM",
+    "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
-def compute_pcr_flag(row):
-    if pd.isna(row['PCR_5DAY_AVG']):
-        return "0"
-    if row['PCR_RATIO'] > row['PCR_5DAY_AVG'] + 0.2:
-        return "1"
-    elif row['PCR_RATIO'] < row['PCR_5DAY_AVG'] - 0.2:
-        return "-1"
-    return "0"
+# Fetch Option Chain Data using exact logic
+def get_option_chain(symbol):
+    datetime_IN = datetime.now(tz_IN)
+    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    with requests.Session() as session:
+        session.get("https://www.nseindia.com", headers=headers)
+        response = session.get(url, headers=headers)
 
-def compute_label(row):
-    if row['PCR_RATIO'] > 1.2 and row['PCR_flag'] == "1":
-        return "sell"
-    elif row['PCR_RATIO'] < 0.8 and row['PCR_flag'] == "-1":
-        return "buy"
-    else:
-        return "hold"
+    if response.status_code != 200:
+        print(f"Failed to fetch data for {symbol}")
+        return pd.DataFrame(), pd.DataFrame()
 
-def fetch_yahoo_option_data(symbol):
     try:
-        expiries = ops.get_expiration_dates(symbol)
-        expiries = [e.strip() for e in expiries if e and e.strip()]
-
-        if not expiries:
-            print(f"⚠️ No valid expiry dates for {symbol}")
-            return None
-
-        expiry = expiries[0]
-        data = ops.get_options_chain(symbol, expiry)
-
-        calls_df = data.get("calls", pd.DataFrame())
-        puts_df = data.get("puts", pd.DataFrame())
-
-        if calls_df.empty or puts_df.empty:
-            print(f"⚠️ Empty options data for {symbol}")
-            return None
-
-        total_call_volume = calls_df["Volume"].fillna(0).sum()
-        total_put_volume = puts_df["Volume"].fillna(0).sum()
-
-        return total_call_volume, total_put_volume, expiry
+        records = response.json()['records']['data']
     except Exception as e:
-        print(f"❌ Error fetching {symbol}: {e}")
-        return None
+        print(f"Error parsing data for {symbol}: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
-def extract_and_compute_features(date_str):
-    results = []
-    failed_symbols = []
+    CE_options = [
+        {"Strike Price": r["CE"]["strikePrice"], "expiryDate": r["CE"]["expiryDate"], "totalTradedVolume": r["CE"]["totalTradedVolume"]}
+        for r in records if "CE" in r
+    ]
 
-    for symbol in INTERESTED_SYMBOLS:
-        print(f"🔄 Fetching {symbol}...")
-        result = fetch_yahoo_option_data(symbol)
-        if not result:
-            failed_symbols.append(symbol)
-            continue
-        ce_vol, pe_vol, expiry = result
+    PE_options = [
+        {"Strike Price": r["PE"]["strikePrice"], "expiryDate": r["PE"]["expiryDate"], "totalTradedVolume": r["PE"]["totalTradedVolume"]}
+        for r in records if "PE" in r
+    ]
 
-        ce_vol = ce_vol or 1e-8  # Prevent division by zero
-        pcr = round(pe_vol / ce_vol, 2)
+    return pd.DataFrame(CE_options), pd.DataFrame(PE_options)
 
-        results.append({
-            "DATE": date_str,
-            "COMPANY": symbol.replace(".NS", ""),
-            "PUT_CONTRACTS": pe_vol,
-            "CALL_CONTRACTS": ce_vol,
-            "PCR_RATIO": pcr,
-            "EXPIRY_DATE": expiry
-        })
-
-    if failed_symbols:
-        print("\n🚫 Symbols with no valid data:")
-        print(", ".join(failed_symbols))
-
-    return pd.DataFrame(results)
-
-def update_existing_excel(historical_path, live_df):
-    today = pd.to_datetime(datetime.now().date())
-    historical_data = pd.read_excel(historical_path, sheet_name=None)
-
-    for company in live_df["COMPANY"].unique():
-        if company not in historical_data:
-            print(f"📄 Skipping {company}, not in historical file")
+# Update and feature engineer PCR data
+def update_pcr_database():
+    for symbol in nifty50_symbols:
+        df_ce, df_pe = get_option_chain(symbol)
+        if df_ce.empty or df_pe.empty:
             continue
 
-        hist_df = historical_data[company]
-        hist_df["DATE"] = pd.to_datetime(hist_df["DATE"])
+        ce_grouped = df_ce.groupby("Strike Price")["totalTradedVolume"].sum()
+        pe_grouped = df_pe.groupby("Strike Price")["totalTradedVolume"].sum()
 
-        if today in hist_df["DATE"].values:
-            print(f"⏭️ {company} already updated for today, skipping")
-            continue
+        df_pcr = pd.DataFrame({
+            "CALL_VOLUME": ce_grouped,
+            "PUT_VOLUME": pe_grouped
+        }).fillna(0)
 
-        new_row = live_df[live_df["COMPANY"] == company].copy()
-        new_row["DATE"] = pd.to_datetime(new_row["DATE"])
+        df_pcr["PCR_RATIO"] = df_pcr["PUT_VOLUME"] / df_pcr["CALL_VOLUME"].replace(0, np.nan)
+        df_pcr.reset_index(inplace=True)
+        df_pcr["DATE"] = today_date
 
-        updated_df = pd.concat([hist_df, new_row], ignore_index=True).sort_values("DATE")
+        # Add expiry (first seen in CE/PE)
+        if not df_ce.empty:
+            df_pcr["EXPIRY_DATE"] = df_ce["expiryDate"].iloc[0]
 
-        updated_df["PCR_5DAY_AVG"] = updated_df["PCR_RATIO"].rolling(window=5).mean()
-        updated_df["PCR_VS_5DAY_AVG"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).round(4)
-        updated_df["PCR_deviation"] = (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]).abs().round(4)
-        updated_df["PCR_ZSCORE"] = (
-            (updated_df["PCR_RATIO"] - updated_df["PCR_5DAY_AVG"]) /
-            updated_df["PCR_RATIO"].rolling(5).std()
-        ).round(4)
-        updated_df["PCR_SPIKE_DIP_SIGNAL"] = updated_df["PCR_ZSCORE"].apply(
-            lambda z: "Spike" if z > 2 else "Dip" if z < -2 else "Normal"
-        )
+        # Add company column
+        df_pcr["COMPANY"] = symbol.upper()
 
-        updated_df['PCR_flag'] = updated_df.apply(compute_pcr_flag, axis=1)
-        updated_df['label'] = updated_df.apply(compute_label, axis=1)
+        # Load last 4 historical rows
+        sheet_name = symbol.upper()
+        if os.path.exists(DB_PATH):
+            try:
+                historical = pd.read_excel(DB_PATH, sheet_name=sheet_name)
+            except:
+                historical = pd.DataFrame()
+        else:
+            historical = pd.DataFrame()
 
-        historical_data[company] = updated_df
+        historical = historical.sort_values("DATE")
+        last_4 = historical.tail(4)
+        combined = pd.concat([last_4, df_pcr], ignore_index=True)
+        combined.sort_values("DATE", inplace=True)
 
-    with pd.ExcelWriter(historical_path, engine="openpyxl", mode='w') as writer:
-        for sheet_name, df in historical_data.items():
-            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        # Compute features
+        combined["PCR_5DAY_AVG"] = combined["PCR_RATIO"].rolling(window=5).mean()
+        combined["PCR_deviation"] = combined["PCR_RATIO"] - combined["PCR_5DAY_AVG"]
+        combined["PCR_ZSCORE"] = combined["PCR_deviation"] / combined["PCR_deviation"].rolling(window=5).std()
+        combined["PCR_SPIKE_DIP_SIGNAL"] = combined["PCR_ZSCORE"].apply(lambda x: "SPIKE" if x > 2 else ("DIP" if x < -2 else "NORMAL"))
+        combined["PCR_flag"] = combined["PCR_RATIO"].apply(lambda x: "HIGH_PCR" if x > 1.3 else ("LOW_PCR" if x < 0.7 else "NEUTRAL"))
 
-    print(f"\n✅ Historical Excel updated at {historical_path}")
+        # Save updated historical data
+        final_historical = pd.concat([historical, df_pcr], ignore_index=True).drop_duplicates(subset=["DATE", "Strike Price"])
+        final_historical = final_historical.merge(combined[["Strike Price", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]], on=["Strike Price", "DATE"], how="left")
+
+        with pd.ExcelWriter(DB_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            final_historical.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        print(f"Updated PCR data for {symbol} on {today_date}")
 
 if __name__ == "__main__":
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    live_df = extract_and_compute_features(today_str)
-
-    if not live_df.empty:
-        update_existing_excel(historical_file, live_df)
-    else:
-        print("❌ No data extracted from Yahoo Finance")
+    update_pcr_database()
 
 
