@@ -574,7 +574,7 @@ def fetch_yahoo_option_data(symbol):
             print(f"❌ No expiries for {symbol}")
             return None
 
-        data = si.get_options_chain(symbol, expiries[0])  # Nearest expiry
+        data = ops.get_options_chain(symbol, expiries[0])  # Nearest expiry
         calls_df = data.get("calls", pd.DataFrame())
         puts_df = data.get("puts", pd.DataFrame())
 
