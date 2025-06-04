@@ -636,6 +636,7 @@ def update_pcr_database():
             final_historical.to_excel(writer, sheet_name=sheet_name, index=False)
 
         print(f"Updated PCR data for {symbol} on {today_date}")
+        time.sleep(2)
 
 if __name__ == "__main__":
     update_pcr_database()
