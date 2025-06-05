@@ -472,13 +472,14 @@
 
 import os
 import time
+import random
 import numpy as np
 import pandas as pd
 import requests
 from datetime import datetime
 from openpyxl import load_workbook
 
-# Try to import Selenium for a fallback method.
+# Attempt to import Selenium for cookie fallback; if not available, fallback won't work.
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -488,7 +489,6 @@ except ImportError:
 # Constants
 today_date = datetime.today().strftime("%Y-%m-%d")
 DB_PATH = 'Databases/Nifty_50_PCR_Hisotrical_Data.xlsx'
-
 nifty50_symbols = [
     "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV",
     "BPCL", "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH",
@@ -497,43 +497,59 @@ nifty50_symbols = [
     "SBIN", "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
+# List of several common user agents
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+]
 
-def get_cookies_via_selenium(symbol):
+def get_random_user_agent():
+    """Returns a random User-Agent string from the list."""
+    return random.choice(USER_AGENTS)
+
+def get_cookies_via_selenium(symbol, user_agent):
     """
-    Use Selenium in headless mode to visit the NSE derivatives page for the symbol
-    and return cookies as a dictionary.
+    Uses Selenium in headless mode to visit the NSE derivatives page for the given symbol
+    and returns cookies as a dictionary.
     """
     home_url = f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}"
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
+    options.add_argument(f"user-agent={user_agent}")
+    
     try:
         driver = webdriver.Chrome(options=options)
     except Exception as e:
-        print(f"Selenium webdriver failed for {symbol}: {e}")
+        print(f"Selenium webdriver initialization failed for {symbol}: {e}")
         return {}
-    driver.get(home_url)
-    time.sleep(3)  # Allow some time for cookies to be set.
-    cookies = driver.get_cookies()
-    driver.quit()
+    
+    try:
+        driver.get(home_url)
+        # Wait a few seconds to allow cookies to be set
+        time.sleep(random.uniform(3, 6))
+        cookies = driver.get_cookies()
+    finally:
+        driver.quit()
+    
     cookie_dict = {}
     for cookie in cookies:
         cookie_dict[cookie["name"]] = cookie["value"]
     return cookie_dict
 
-
 def fetch_option_chain(symbol):
     """
-    Fetches the option chain for an equity symbol using NSE's endpoint.
-    If a 403 is encountered, a Selenium fallback is attempted (if available)
-    to update session cookies. Returns a DataFrame mimicking the expected CSV.
+    Fetches the option chain for a given equity symbol using NSE's endpoint.
+    If it receives a 403 error, it attempts a Selenium fallback to refresh cookies.
+    Returns a DataFrame similar to your expected CSV format.
     """
     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    user_agent = get_random_user_agent()
     headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/91.0.4472.124 Safari/537.36"),
+        "User-Agent": user_agent,
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
         "Referer": f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}",
@@ -555,15 +571,15 @@ def fetch_option_chain(symbol):
     except Exception as e:
         print(f"Initial connection failed for {symbol}: {e}")
         return pd.DataFrame()
-
+    
     try:
         response = session.get(url, timeout=10)
-        # If status code is 403, attempt Selenium fallback to get cookies.
         if response.status_code != 200:
             print(f"Failed to fetch data for {symbol}, status code {response.status_code}")
+            # If we get a 403 and Selenium is available, attempt fallback.
             if response.status_code == 403 and webdriver is not None:
                 print("Attempting fallback using Selenium to get cookies...")
-                selenium_cookies = get_cookies_via_selenium(symbol)
+                selenium_cookies = get_cookies_via_selenium(symbol, user_agent)
                 if selenium_cookies:
                     session.cookies.update(selenium_cookies)
                     response = session.get(url, timeout=10)
@@ -574,12 +590,12 @@ def fetch_option_chain(symbol):
                     return pd.DataFrame()
             else:
                 return pd.DataFrame()
-
+        
         data = response.json()
-        records = data.get('records', {}).get('data', [])
+        records = data.get("records", {}).get("data", [])
         rows = []
         for record in records:
-            # Process Call options (CE) if available
+            # Process Call (CE) options data if available
             if "CE" in record and record["CE"]:
                 rows.append({
                     "INSTRUMENT": "OPTSTK",
@@ -589,7 +605,7 @@ def fetch_option_chain(symbol):
                     "EXPIRY_DT": record["CE"].get("expiryDate", None),
                     "CONTRACTS": record["CE"].get("openInterest", 0)
                 })
-            # Process Put options (PE) if available
+            # Process Put (PE) options data if available
             if "PE" in record and record["PE"]:
                 rows.append({
                     "INSTRUMENT": "OPTSTK",
@@ -604,10 +620,9 @@ def fetch_option_chain(symbol):
         print(f"Error parsing data for {symbol}: {e}")
         return pd.DataFrame()
 
-
 def fetch_and_save_bhavcopy():
     """
-    Iterates over the nifty50_symbols, fetches their option chain data,
+    Iterates over the nifty50_symbols, fetches their option chain data with randomized delays,
     and saves the combined data to 'fo_bhav.csv'.
     """
     all_data = []
@@ -616,8 +631,8 @@ def fetch_and_save_bhavcopy():
         df_symbol = fetch_option_chain(symbol)
         if not df_symbol.empty:
             all_data.append(df_symbol)
-        # Introduce a slightly longer delay to reduce pressure on NSE servers.
-        time.sleep(4)
+        # Random delay between 4 to 7 seconds between requests.
+        time.sleep(random.uniform(4, 7))
     if all_data:
         combined = pd.concat(all_data, ignore_index=True)
         combined.to_csv("fo_bhav.csv", index=False)
@@ -625,43 +640,41 @@ def fetch_and_save_bhavcopy():
     else:
         print("No data fetched.")
 
-
 def update_pcr_database():
     """
-    Reads the option chain data from fo_bhav.csv, processes PCR calculations for each symbol,
+    Reads the option chain data from 'fo_bhav.csv', processes PCR calculations for each symbol,
     and updates the Excel database.
-    If no CSV file is available, the update process exits gracefully.
+    If no CSV file is available, exits gracefully.
     """
-    # Fetch new data if CSV doesn't exist.
     if not os.path.exists("fo_bhav.csv"):
         fetch_and_save_bhavcopy()
 
-    # Double-check that fo_bhav.csv exists.
     if not os.path.exists("fo_bhav.csv"):
         print("No fo_bhav.csv file was created; exiting update_pcr_database.")
         return
 
     df = pd.read_csv("fo_bhav.csv")
-    # Retain only stock options.
-    df = df[df['INSTRUMENT'].isin(["OPTSTK"])]
+    # Retain only stock options data.
+    df = df[df["INSTRUMENT"].isin(["OPTSTK"])]
 
     for symbol in nifty50_symbols:
         df_sym = df[df["SYMBOL"] == symbol]
         if df_sym.empty:
             continue
 
-        # Aggregate open interest for puts (PE) and calls (CE) by strike price.
-        pe_vol = df_sym[df_sym["OPTION_TYP"] == "PE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "PUT_CONTRACTS"})
-        ce_vol = df_sym[df_sym["OPTION_TYP"] == "CE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "CALL_CONTRACTS"})
+        pe_vol = df_sym[df_sym["OPTION_TYP"] == "PE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(
+            columns={"CONTRACTS": "PUT_CONTRACTS"}
+        )
+        ce_vol = df_sym[df_sym["OPTION_TYP"] == "CE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(
+            columns={"CONTRACTS": "CALL_CONTRACTS"}
+        )
         df_pcr = pd.concat([pe_vol, ce_vol], axis=1).fillna(0)
-
         df_pcr["PCR_RATIO"] = df_pcr["PUT_CONTRACTS"] / df_pcr["CALL_CONTRACTS"].replace(0, np.nan)
         df_pcr.reset_index(inplace=True)
         df_pcr["DATE"] = today_date
         df_pcr["COMPANY"] = symbol
         df_pcr["EXPIRY_DATE"] = df_sym["EXPIRY_DT"].iloc[0]
 
-        # Load historical data from the Excel database (if it exists).
         sheet_name = symbol
         if os.path.exists(DB_PATH):
             try:
@@ -676,14 +689,16 @@ def update_pcr_database():
         combined = pd.concat([last_4, df_pcr], ignore_index=True)
         combined.sort_values("DATE", inplace=True)
 
-        # Compute additional PCR features.
         combined["PCR_5DAY_AVG"] = combined["PCR_RATIO"].rolling(window=5).mean()
         combined["PCR_deviation"] = combined["PCR_RATIO"] - combined["PCR_5DAY_AVG"]
         combined["PCR_ZSCORE"] = combined["PCR_deviation"] / combined["PCR_deviation"].rolling(window=5).std()
-        combined["PCR_SPIKE_DIP_SIGNAL"] = combined["PCR_ZSCORE"].apply(lambda x: "SPIKE" if x > 2 else ("DIP" if x < -2 else "NORMAL"))
-        combined["PCR_flag"] = combined["PCR_RATIO"].apply(lambda x: "HIGH_PCR" if x > 1.3 else ("LOW_PCR" if x < 0.7 else "NEUTRAL"))
+        combined["PCR_SPIKE_DIP_SIGNAL"] = combined["PCR_ZSCORE"].apply(
+            lambda x: "SPIKE" if x > 2 else ("DIP" if x < -2 else "NORMAL")
+        )
+        combined["PCR_flag"] = combined["PCR_RATIO"].apply(
+            lambda x: "HIGH_PCR" if x > 1.3 else ("LOW_PCR" if x < 0.7 else "NEUTRAL")
+        )
 
-        # Merge computed features back with the aggregated data.
         final = pd.concat([historical, df_pcr], ignore_index=True).drop_duplicates(subset=["DATE", "STRIKE_PR"])
         final = final.merge(
             combined[["STRIKE_PR", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]],
@@ -691,15 +706,14 @@ def update_pcr_database():
             how="left"
         )
 
-        # Update the Excel database for the current symbol.
-        with pd.ExcelWriter(DB_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+        with pd.ExcelWriter(DB_PATH, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
             final.to_excel(writer, sheet_name=sheet_name, index=False)
 
         print(f"Updated PCR data for {symbol} on {today_date}")
-        time.sleep(2)
-
+        time.sleep(random.uniform(2, 4))
 
 if __name__ == "__main__":
     update_pcr_database()
+
 
 
