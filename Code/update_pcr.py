@@ -490,12 +490,9 @@ nifty50_symbols = [
     "SBIN", "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
-# -----------------------------
-# NEW EXTRACTION LOGIC
-# -----------------------------
 def fetch_option_chain(symbol):
     """
-    Fetches the option chain for an equity symbol using the NSE endpoint for equities.
+    Fetches the option chain for an equity symbol using the NSE endpoint.
     Returns a DataFrame that mimics the historical CSV format.
     """
     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
@@ -505,15 +502,18 @@ def fetch_option_chain(symbol):
                        "Chrome/91.0.4472.124 Safari/537.36"),
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
+        # Adding a Referer header to mimic a real browser visit
+        "Referer": f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}",
         "Connection": "keep-alive"
     }
     
     session = requests.Session()
     session.headers.update(headers)
     
-    # Initial request to set cookies and mimic a browser visit
+    # Initial call to NSE to obtain cookies (visiting the derivatives page for the symbol)
+    home_url = f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}"
     try:
-        session.get("https://www.nseindia.com", timeout=5)
+        session.get(home_url, timeout=5)
     except Exception as e:
         print(f"Initial connection failed for {symbol}: {e}")
         return pd.DataFrame()
@@ -527,26 +527,26 @@ def fetch_option_chain(symbol):
         data = response.json()
         records = data.get('records', {}).get('data', [])
         rows = []
-        for r in records:
-            # Process Call options if present
-            if "CE" in r and r["CE"]:
+        for record in records:
+            # Process Call (CE) options if available
+            if "CE" in record and record["CE"]:
                 rows.append({
                     "INSTRUMENT": "OPTSTK",
                     "SYMBOL": symbol,
                     "OPTION_TYP": "CE",
-                    "STRIKE_PR": r["CE"].get("strikePrice", None),
-                    "EXPIRY_DT": r["CE"].get("expiryDate", None),
-                    "CONTRACTS": r["CE"].get("openInterest", 0)
+                    "STRIKE_PR": record["CE"].get("strikePrice", None),
+                    "EXPIRY_DT": record["CE"].get("expiryDate", None),
+                    "CONTRACTS": record["CE"].get("openInterest", 0)
                 })
-            # Process Put options if present
-            if "PE" in r and r["PE"]:
+            # Process Put (PE) options if available
+            if "PE" in record and record["PE"]:
                 rows.append({
                     "INSTRUMENT": "OPTSTK",
                     "SYMBOL": symbol,
                     "OPTION_TYP": "PE",
-                    "STRIKE_PR": r["PE"].get("strikePrice", None),
-                    "EXPIRY_DT": r["PE"].get("expiryDate", None),
-                    "CONTRACTS": r["PE"].get("openInterest", 0)
+                    "STRIKE_PR": record["PE"].get("strikePrice", None),
+                    "EXPIRY_DT": record["PE"].get("expiryDate", None),
+                    "CONTRACTS": record["PE"].get("openInterest", 0)
                 })
         return pd.DataFrame(rows)
     except Exception as e:
@@ -564,7 +564,7 @@ def fetch_and_save_bhavcopy():
         df_symbol = fetch_option_chain(symbol)
         if not df_symbol.empty:
             all_data.append(df_symbol)
-        # Pause between requests to avoid rate limiting
+        # Pause between requests to avoid rate limiting by NSE
         time.sleep(2)
     if all_data:
         combined = pd.concat(all_data, ignore_index=True)
@@ -573,16 +573,12 @@ def fetch_and_save_bhavcopy():
     else:
         print("No data fetched.")
 
-# -----------------------------
-# PCR DATABASE UPDATE FUNCTION (AS IS)
-# -----------------------------
 def update_pcr_database():
-    # If the CSV containing option data doesn't exist, fetch and save it.
     if not os.path.exists("fo_bhav.csv"):
         fetch_and_save_bhavcopy()
 
     df = pd.read_csv("fo_bhav.csv")
-    # Filter only for stock options (similar to original behavior)
+    # Retain only stock options, similar to the original behavior
     df = df[df['INSTRUMENT'].isin(["OPTSTK"])]
 
     for symbol in nifty50_symbols:
@@ -591,7 +587,7 @@ def update_pcr_database():
         if df_sym.empty:
             continue
 
-        # Aggregate call and put volumes by strike price
+        # Aggregate put and call open interest by strike price
         pe_vol = df_sym[df_sym["OPTION_TYP"] == "PE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "PUT_CONTRACTS"})
         ce_vol = df_sym[df_sym["OPTION_TYP"] == "CE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "CALL_CONTRACTS"})
         df_pcr = pd.concat([pe_vol, ce_vol], axis=1).fillna(0)
@@ -602,7 +598,7 @@ def update_pcr_database():
         df_pcr["COMPANY"] = symbol
         df_pcr["EXPIRY_DATE"] = df_sym["EXPIRY_DT"].iloc[0]
 
-        # Load historical data for this symbol from the Excel database (if it exists)
+        # Load historical data for this symbol from the Excel database if it exists
         sheet_name = symbol
         if os.path.exists(DB_PATH):
             try:
@@ -624,10 +620,13 @@ def update_pcr_database():
         combined["PCR_SPIKE_DIP_SIGNAL"] = combined["PCR_ZSCORE"].apply(lambda x: "SPIKE" if x > 2 else ("DIP" if x < -2 else "NORMAL"))
         combined["PCR_flag"] = combined["PCR_RATIO"].apply(lambda x: "HIGH_PCR" if x > 1.3 else ("LOW_PCR" if x < 0.7 else "NEUTRAL"))
 
-        # Merge back with historical data and remove duplicate dates (except for STRIKE_PR variations)
+        # Merge the computed features back with the historical data
         final = pd.concat([historical, df_pcr], ignore_index=True).drop_duplicates(subset=["DATE", "STRIKE_PR"])
-        final = final.merge(combined[["STRIKE_PR", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]],
-                            on=["STRIKE_PR", "DATE"], how="left")
+        final = final.merge(
+            combined[["STRIKE_PR", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]],
+            on=["STRIKE_PR", "DATE"],
+            how="left"
+        )
 
         # Write the final PCR data for the symbol to the Excel file
         from openpyxl import load_workbook
