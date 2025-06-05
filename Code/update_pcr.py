@@ -476,56 +476,50 @@ import time
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from jugaad_data.nse import NSEOptionChain
+from jugaad_data.nse import bhavcopy_fo_save
 
 # Constants
-today_date = datetime.now().strftime('%Y-%m-%d')
+today_date = datetime.today().strftime("%Y-%m-%d")
 DB_PATH = 'Databases/Nifty_50_PCR_Hisotrical_Data.xlsx'
 
 nifty50_symbols = [
-    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BPCL",
-    "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK",
-    "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC", "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK",
-    "LT", "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SUNPHARMA", "TCS",
-    "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV",
+    "BPCL", "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH",
+    "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC", "INDUSINDBK", "INFY",
+    "JSWSTEEL", "KOTAKBANK", "LT", "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE",
+    "SBIN", "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
-def get_option_chain_jugaad(symbol):
-    try:
-        df = NSEOptionChain(symbol=symbol).get_ohlc_expiry()
-        if df.empty:
-            print(f"No data for {symbol}")
-            return pd.DataFrame(), pd.DataFrame()
-        latest_expiry = df['expiryDate'].iloc[0]
-        ce = df[df['type'] == 'CE']
-        pe = df[df['type'] == 'PE']
-        return ce, pe
-    except Exception as e:
-        print(f"Error fetching option chain for {symbol}: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+def fetch_and_save_bhavcopy():
+    date = datetime.today()
+    bhavcopy_fo_save(date, "fo_bhav.csv")
 
 def update_pcr_database():
-    sheets_to_write = {}
+    if not os.path.exists("fo_bhav.csv"):
+        fetch_and_save_bhavcopy()
+
+    df = pd.read_csv("fo_bhav.csv")
+    df = df[df['INSTRUMENT'].isin(["OPTSTK"])]
 
     for symbol in nifty50_symbols:
-        df_ce, df_pe = get_option_chain_jugaad(symbol)
-        if df_ce.empty or df_pe.empty:
+        df_sym = df[df["SYMBOL"] == symbol]
+
+        if df_sym.empty:
             continue
 
-        ce_grouped = df_ce.groupby("strikePrice")["volume"].sum()
-        pe_grouped = df_pe.groupby("strikePrice")["volume"].sum()
+        # Aggregate call and put volumes
+        pe_vol = df_sym[df_sym["OPTION_TYP"] == "PE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "PUT_CONTRACTS"})
+        ce_vol = df_sym[df_sym["OPTION_TYP"] == "CE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "CALL_CONTRACTS"})
+        df_pcr = pd.concat([pe_vol, ce_vol], axis=1).fillna(0)
 
-        df_pcr = pd.DataFrame({
-            "Strike Price": ce_grouped.index,
-            "CALL_VOLUME": ce_grouped.values,
-            "PUT_VOLUME": pe_grouped.reindex(ce_grouped.index, fill_value=0).values
-        })
-        df_pcr["PCR_RATIO"] = df_pcr["PUT_VOLUME"] / df_pcr["CALL_VOLUME"].replace(0, np.nan)
+        df_pcr["PCR_RATIO"] = df_pcr["PUT_CONTRACTS"] / df_pcr["CALL_CONTRACTS"].replace(0, np.nan)
+        df_pcr.reset_index(inplace=True)
         df_pcr["DATE"] = today_date
-        df_pcr["EXPIRY_DATE"] = df_ce["expiryDate"].iloc[0] if not df_ce.empty else None
-        df_pcr["COMPANY"] = symbol.upper()
+        df_pcr["COMPANY"] = symbol
+        df_pcr["EXPIRY_DATE"] = df_sym["EXPIRY_DT"].iloc[0]
 
-        sheet_name = symbol.upper()
+        # Load history
+        sheet_name = symbol
         if os.path.exists(DB_PATH):
             try:
                 historical = pd.read_excel(DB_PATH, sheet_name=sheet_name)
@@ -536,32 +530,30 @@ def update_pcr_database():
 
         historical = historical.sort_values("DATE")
         last_4 = historical.tail(4)
-        combined = pd.concat([last_4, df_pcr], ignore_index=True).sort_values("DATE")
+        combined = pd.concat([last_4, df_pcr], ignore_index=True)
+        combined.sort_values("DATE", inplace=True)
 
+        # Compute features
         combined["PCR_5DAY_AVG"] = combined["PCR_RATIO"].rolling(window=5).mean()
         combined["PCR_deviation"] = combined["PCR_RATIO"] - combined["PCR_5DAY_AVG"]
         combined["PCR_ZSCORE"] = combined["PCR_deviation"] / combined["PCR_deviation"].rolling(window=5).std()
         combined["PCR_SPIKE_DIP_SIGNAL"] = combined["PCR_ZSCORE"].apply(lambda x: "SPIKE" if x > 2 else ("DIP" if x < -2 else "NORMAL"))
         combined["PCR_flag"] = combined["PCR_RATIO"].apply(lambda x: "HIGH_PCR" if x > 1.3 else ("LOW_PCR" if x < 0.7 else "NEUTRAL"))
 
-        final_historical = pd.concat([historical, df_pcr], ignore_index=True).drop_duplicates(subset=["DATE", "Strike Price"])
-        final_historical = final_historical.merge(
-            combined[["Strike Price", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]],
-            on=["Strike Price", "DATE"],
-            how="left"
-        )
+        # Merge back into historical
+        final = pd.concat([historical, df_pcr], ignore_index=True).drop_duplicates(subset=["DATE", "STRIKE_PR"])
+        final = final.merge(combined[["STRIKE_PR", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]],
+                            on=["STRIKE_PR", "DATE"], how="left")
 
-        sheets_to_write[symbol] = final_historical
+        from openpyxl import load_workbook
+        with pd.ExcelWriter(DB_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            final.to_excel(writer, sheet_name=sheet_name, index=False)
+
         print(f"Updated PCR data for {symbol} on {today_date}")
-        time.sleep(1.5)
-
-    # Write all sheets at once
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with pd.ExcelWriter(DB_PATH, engine='openpyxl', mode='w') as writer:
-        for symbol, df in sheets_to_write.items():
-            df.to_excel(writer, sheet_name=symbol, index=False)
+        time.sleep(2)
 
 if __name__ == "__main__":
     update_pcr_database()
+
 
 
