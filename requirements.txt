@@ -13,6 +13,5 @@ yahoo_fin
 requests-html
 lxml_html_clean
 pytz
-
-
+selenium 
 
