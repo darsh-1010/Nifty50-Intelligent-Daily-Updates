@@ -478,6 +478,13 @@ import requests
 from datetime import datetime
 from openpyxl import load_workbook
 
+# Try to import Selenium for a fallback method.
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+except ImportError:
+    webdriver = None
+
 # Constants
 today_date = datetime.today().strftime("%Y-%m-%d")
 DB_PATH = 'Databases/Nifty_50_PCR_Hisotrical_Data.xlsx'
@@ -490,10 +497,37 @@ nifty50_symbols = [
     "SBIN", "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
+
+def get_cookies_via_selenium(symbol):
+    """
+    Use Selenium in headless mode to visit the NSE derivatives page for the symbol
+    and return cookies as a dictionary.
+    """
+    home_url = f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}"
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    try:
+        driver = webdriver.Chrome(options=options)
+    except Exception as e:
+        print(f"Selenium webdriver failed for {symbol}: {e}")
+        return {}
+    driver.get(home_url)
+    time.sleep(3)  # Allow some time for cookies to be set.
+    cookies = driver.get_cookies()
+    driver.quit()
+    cookie_dict = {}
+    for cookie in cookies:
+        cookie_dict[cookie["name"]] = cookie["value"]
+    return cookie_dict
+
+
 def fetch_option_chain(symbol):
     """
-    Fetches the option chain for an equity symbol using NSE's option-chain endpoint,
-    mimicking browser headers. Returns a DataFrame with columns mimicking your CSV.
+    Fetches the option chain for an equity symbol using NSE's endpoint.
+    If a 403 is encountered, a Selenium fallback is attempted (if available)
+    to update session cookies. Returns a DataFrame mimicking the expected CSV.
     """
     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
     headers = {
@@ -502,36 +536,45 @@ def fetch_option_chain(symbol):
                        "Chrome/91.0.4472.124 Safari/537.36"),
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
-        # Mimic a browser visit by including a Referer pointing to the derivatives page.
         "Referer": f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}",
         "Connection": "keep-alive",
         "Pragma": "no-cache",
         "Cache-Control": "no-cache",
-        # Additional security headers some browsers include:
         "sec-ch-ua": "\" Not A;Brand\";v=\"99\", \"Chromium\";v=\"90\", \"Google Chrome\";v=\"90\"",
         "sec-ch-ua-mobile": "?0",
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin"
     }
-    
+
     session = requests.Session()
     session.headers.update(headers)
-    
-    # Initial call to obtain cookies by visiting the derivatives page for the symbol
     home_url = f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}"
     try:
         session.get(home_url, timeout=5)
     except Exception as e:
         print(f"Initial connection failed for {symbol}: {e}")
         return pd.DataFrame()
-    
+
     try:
         response = session.get(url, timeout=10)
+        # If status code is 403, attempt Selenium fallback to get cookies.
         if response.status_code != 200:
             print(f"Failed to fetch data for {symbol}, status code {response.status_code}")
-            return pd.DataFrame()
-            
+            if response.status_code == 403 and webdriver is not None:
+                print("Attempting fallback using Selenium to get cookies...")
+                selenium_cookies = get_cookies_via_selenium(symbol)
+                if selenium_cookies:
+                    session.cookies.update(selenium_cookies)
+                    response = session.get(url, timeout=10)
+                    if response.status_code != 200:
+                        print(f"Fallback failed for {symbol}, status code {response.status_code}")
+                        return pd.DataFrame()
+                else:
+                    return pd.DataFrame()
+            else:
+                return pd.DataFrame()
+
         data = response.json()
         records = data.get('records', {}).get('data', [])
         rows = []
@@ -561,6 +604,7 @@ def fetch_option_chain(symbol):
         print(f"Error parsing data for {symbol}: {e}")
         return pd.DataFrame()
 
+
 def fetch_and_save_bhavcopy():
     """
     Iterates over the nifty50_symbols, fetches their option chain data,
@@ -572,8 +616,8 @@ def fetch_and_save_bhavcopy():
         df_symbol = fetch_option_chain(symbol)
         if not df_symbol.empty:
             all_data.append(df_symbol)
-        # Pause between requests to avoid triggering rate limits
-        time.sleep(3)
+        # Introduce a slightly longer delay to reduce pressure on NSE servers.
+        time.sleep(4)
     if all_data:
         combined = pd.concat(all_data, ignore_index=True)
         combined.to_csv("fo_bhav.csv", index=False)
@@ -581,31 +625,32 @@ def fetch_and_save_bhavcopy():
     else:
         print("No data fetched.")
 
+
 def update_pcr_database():
     """
     Reads the option chain data from fo_bhav.csv, processes PCR calculations for each symbol,
-    and updates the Excel database. If no CSV file is available, exits the update.
+    and updates the Excel database.
+    If no CSV file is available, the update process exits gracefully.
     """
-    # Fetch new data if CSV doesn't exist
+    # Fetch new data if CSV doesn't exist.
     if not os.path.exists("fo_bhav.csv"):
         fetch_and_save_bhavcopy()
-        
-    # Double-check that fo_bhav.csv exists now; if not, exit gracefully.
+
+    # Double-check that fo_bhav.csv exists.
     if not os.path.exists("fo_bhav.csv"):
         print("No fo_bhav.csv file was created; exiting update_pcr_database.")
         return
 
     df = pd.read_csv("fo_bhav.csv")
-    # Retain only stock options (as per original behavior)
+    # Retain only stock options.
     df = df[df['INSTRUMENT'].isin(["OPTSTK"])]
 
     for symbol in nifty50_symbols:
         df_sym = df[df["SYMBOL"] == symbol]
-
         if df_sym.empty:
             continue
 
-        # Aggregate open interest for PE (Puts) and CE (Calls) by strike price
+        # Aggregate open interest for puts (PE) and calls (CE) by strike price.
         pe_vol = df_sym[df_sym["OPTION_TYP"] == "PE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "PUT_CONTRACTS"})
         ce_vol = df_sym[df_sym["OPTION_TYP"] == "CE"].groupby("STRIKE_PR")[["CONTRACTS"]].sum().rename(columns={"CONTRACTS": "CALL_CONTRACTS"})
         df_pcr = pd.concat([pe_vol, ce_vol], axis=1).fillna(0)
@@ -616,7 +661,7 @@ def update_pcr_database():
         df_pcr["COMPANY"] = symbol
         df_pcr["EXPIRY_DATE"] = df_sym["EXPIRY_DT"].iloc[0]
 
-        # Load historical data from the Excel database (if it exists)
+        # Load historical data from the Excel database (if it exists).
         sheet_name = symbol
         if os.path.exists(DB_PATH):
             try:
@@ -631,14 +676,14 @@ def update_pcr_database():
         combined = pd.concat([last_4, df_pcr], ignore_index=True)
         combined.sort_values("DATE", inplace=True)
 
-        # Compute additional PCR features
+        # Compute additional PCR features.
         combined["PCR_5DAY_AVG"] = combined["PCR_RATIO"].rolling(window=5).mean()
         combined["PCR_deviation"] = combined["PCR_RATIO"] - combined["PCR_5DAY_AVG"]
         combined["PCR_ZSCORE"] = combined["PCR_deviation"] / combined["PCR_deviation"].rolling(window=5).std()
         combined["PCR_SPIKE_DIP_SIGNAL"] = combined["PCR_ZSCORE"].apply(lambda x: "SPIKE" if x > 2 else ("DIP" if x < -2 else "NORMAL"))
         combined["PCR_flag"] = combined["PCR_RATIO"].apply(lambda x: "HIGH_PCR" if x > 1.3 else ("LOW_PCR" if x < 0.7 else "NEUTRAL"))
 
-        # Merge features back with the raw aggregated data
+        # Merge computed features back with the aggregated data.
         final = pd.concat([historical, df_pcr], ignore_index=True).drop_duplicates(subset=["DATE", "STRIKE_PR"])
         final = final.merge(
             combined[["STRIKE_PR", "DATE", "PCR_5DAY_AVG", "PCR_deviation", "PCR_ZSCORE", "PCR_SPIKE_DIP_SIGNAL", "PCR_flag"]],
@@ -646,12 +691,13 @@ def update_pcr_database():
             how="left"
         )
 
-        # Write the final PCR data for the symbol to the Excel file
+        # Update the Excel database for the current symbol.
         with pd.ExcelWriter(DB_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             final.to_excel(writer, sheet_name=sheet_name, index=False)
 
         print(f"Updated PCR data for {symbol} on {today_date}")
         time.sleep(2)
+
 
 if __name__ == "__main__":
     update_pcr_database()
