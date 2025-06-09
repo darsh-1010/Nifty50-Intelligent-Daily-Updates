@@ -5,19 +5,24 @@ from datetime import datetime, timedelta
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import os
- 
-# ---------------------- API KEYS ----------------------
-NEWSDATA_API_KEY = "pub_79508cd750e96ccb61c080a4e004aca7439c3"
-FINNHUB_API_KEY = "cvrokohr01qnpem8p570cvrokohr01qnpem8p57g"
-GNEWS_API_KEY = "434440771cb4bd849b92821e037741ba"
+from dotenv import load_dotenv
+import logging
 
-# NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
-# FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
-# GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-# if not all([NEWSDATA_API_KEY, FINNHUB_API_KEY, GNEWS_API_KEY]):
-#     raise ValueError("❌ One or more API keys are not set in environment variables.")
- 
+# Load environment variables
+load_dotenv()
+
+# Get API keys from environment variables
+NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
+
+if not all([NEWSDATA_API_KEY, FINNHUB_API_KEY, GNEWS_API_KEY]):
+    logging.error("❌ One or more API keys are not set in environment variables. Please check your .env file.")
+    raise ValueError("❌ One or more API keys are not set in environment variables. Please check your .env file.")
+
 # ---------------------- FINBERT SETUP ----------------------
 tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
 model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
